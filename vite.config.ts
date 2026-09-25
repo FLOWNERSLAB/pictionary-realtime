@@ -2,9 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
-import { REALTIME_ENDPOINTS } from './src/data/endpoints.ts';
-import { daydreamProxy } from './vite-plugin-daydream-proxy.ts';
-import { falProxy } from './vite-plugin-fal-proxy.ts';
+import { labApi } from './vite-plugin-api.ts';
 
 /**
  * The published @digo-labs packages declare a `development` export condition
@@ -20,8 +18,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       tailwindcss(),
-      falProxy({ key: env.FAL_KEY, realtimeApps: REALTIME_ENDPOINTS }),
-      daydreamProxy({ key: env.DAYDREAM_API_KEY }),
+      labApi({ FAL_KEY: env.FAL_KEY, DAYDREAM_API_KEY: env.DAYDREAM_API_KEY }),
     ],
     resolve: { conditions },
     server: { port: 5178 },

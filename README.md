@@ -12,6 +12,9 @@ Sirve para dos cosas a la vez:
 
 ## Arrancar
 
+**Si solo quieres probar**, abre la URL de Vercel del equipo con la contraseña del lab y salta a «Qué probar». Lo
+que sigue es para correrlo en tu máquina.
+
 Necesitas Node 20.19 o más reciente y un navegador Chromium (Chrome, Edge, Brave): el carril de Daydream lee los
 frames con `MediaStreamTrackProcessor`, que Firefox y Safari no tienen.
 
@@ -29,9 +32,31 @@ del equipo: para el bucle cuando no estés dibujando (`Espacio`).
 - Sin `DAYDREAM_API_KEY` los modelos de StreamDiffusion salen bloqueados.
 - Vite solo lee `.env` al arrancar: si cambias una clave, reinicia `npm run dev`.
 
-Las claves viven solo en el servidor de Vite: el navegador habla con `/api/fal/proxy` y `/api/daydream/*`, que
-reenvían con la cabecera `Authorization` puesta en el servidor (`vite-plugin-fal-proxy.ts`, mismo contrato que
-`@fal-ai/server-proxy`, y `vite-plugin-daydream-proxy.ts`). Por eso esto es **solo para desarrollo local**.
+Las claves viven solo en el servidor: el navegador habla con `/api/fal/*` y `/api/daydream/*`, y `api/lab.ts`
+reenvía con la cabecera `Authorization` puesta en el servidor (el proxy de fal sigue el contrato de
+`@fal-ai/server-proxy`). El mismo fichero sirve en local, montado en Vite por `vite-plugin-api.ts`, y en Vercel
+como función.
+
+## Desplegar en Vercel
+
+El repo está listo para Vercel tal cual (preset Vite):
+
+- `api/lab.ts` es la única función. `vercel.json` reescribe `/api/<ruta>` a `/api/lab?path=<ruta>` y le da hasta
+  300 s, por los arranques en frío de fal.
+- `middleware.ts` pone **una contraseña compartida delante de toda la web**: la URL gasta créditos del equipo y no
+  puede quedar abierta. El navegador la pide una vez; vale cualquier usuario.
+- El vídeo de Daydream y el socket de klein van del navegador al proveedor: la función solo crea streams, firma
+  tokens y reenvía peticiones cortas.
+
+Variables de entorno en Vercel (Settings → Environment Variables), **nunca en el repo**:
+
+| Variable | Qué es |
+|:--|:--|
+| `FAL_KEY` | Clave de fal del equipo |
+| `DAYDREAM_API_KEY` | Clave de Daydream |
+| `LAB_PASSWORD` | Contraseña que se pide al abrir la web. Sin ella, la web queda abierta |
+
+Tras cambiar una variable hay que volver a desplegar.
 
 ### Qué probar
 
@@ -284,8 +309,10 @@ detecta midiendo el brillo del frame recibido y lo dice en pantalla en vez de mo
 
 - El endpoint de tokens realtime solo firma para los endpoints de `src/data/endpoints.ts`; antes firmaba para
   cualquier app que pidiera el navegador.
-- El proxy vive en el plugin de Vite, así que esto es **solo dev**. Para publicarlo hay que mover el proxy a un
-  backend (o montarlo dentro de una app digo con `services.ai.fal`, que ya trae el proxy con la key del equipo).
+- La contraseña de `middleware.ts` es una sola para todo el equipo: si se filtra, se cambia `LAB_PASSWORD` y se
+  vuelve a desplegar. No hay límite de gasto por usuario; el tope lo ponen los saldos de fal y Daydream.
+- La lista de endpoints realtime está en dos sitios (`src/data/endpoints.ts` y `api/lab.ts`): la función de Vercel
+  no puede importar ficheros relativos sin extensión, así que lleva su copia.
 - Los `@digo-labs/*` publicados declaran una condición de export `development` que apunta a `./src`, que npm no
   publica. `vite.config.ts` quita esa condición para que resuelvan a `dist`.
 - Fuera del template hay que montar los providers a mano. **`TooltipProvider` no es opcional**: cada botón de la

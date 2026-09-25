@@ -1,15 +1,15 @@
 import { fal } from '@fal-ai/client';
 
 /**
- * Every request goes through the Vite dev middleware, which attaches FAL_KEY
- * server side. The browser bundle never sees the key.
+ * Every request goes through api/lab.ts (Vite in dev, a Vercel Function when
+ * deployed), which attaches FAL_KEY server side. The browser bundle never sees the key.
  */
 fal.config({ proxyUrl: '/api/fal/proxy' });
 
 export { fal };
 
 /**
- * Mints the realtime token on the dev server. The generic proxy cannot do it:
+ * Mints the realtime token on the server (api/lab.ts). The generic proxy cannot do it:
  * fal drops `allowed_apps` when the request is proxied, and the socket then
  * answers `Forbidden` on the first frame.
  */

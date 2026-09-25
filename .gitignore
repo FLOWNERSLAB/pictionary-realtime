@@ -27,3 +27,4 @@ dist-ssr
 # Local only
 .claude/settings.local.json
 scripts/prompt-matrix/shots/
+.vercel
