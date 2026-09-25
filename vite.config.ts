@@ -1,0 +1,29 @@
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { defineConfig, loadEnv } from 'vite';
+
+import { REALTIME_ENDPOINTS } from './src/data/endpoints.ts';
+import { daydreamProxy } from './vite-plugin-daydream-proxy.ts';
+import { falProxy } from './vite-plugin-fal-proxy.ts';
+
+/**
+ * The published @digo-labs packages declare a `development` export condition
+ * pointing at `./src`, which npm does not ship. Dropping that condition makes
+ * Vite resolve them through `import`/`default`, i.e. their built files.
+ */
+const conditions = ['module', 'browser', 'production'];
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+
+  return {
+    plugins: [
+      react(),
+      tailwindcss(),
+      falProxy({ key: env.FAL_KEY, realtimeApps: REALTIME_ENDPOINTS }),
+      daydreamProxy({ key: env.DAYDREAM_API_KEY }),
+    ],
+    resolve: { conditions },
+    server: { port: 5178 },
+  };
+});
