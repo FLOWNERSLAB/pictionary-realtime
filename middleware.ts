@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * Vercel Routing Middleware: one shared password in front of the whole deployed lab.
  * The API routes spend the team's fal and Daydream credit, so the public URL cannot

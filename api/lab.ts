@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * Server side of the lab: the only place that sees FAL_KEY and DAYDREAM_API_KEY.
  *
