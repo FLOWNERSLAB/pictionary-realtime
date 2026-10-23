@@ -180,6 +180,99 @@
   }
 }
 
+
+/* AI Strength: the eight rungs under the slider, as a segmented scale. */
+.lab-rungs {
+  display: flex;
+  gap: 2px;
+}
+
+.lab-rung {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0.3rem 0;
+  border-radius: 4px;
+  border-top: 2px solid var(--color-neutralA-5);
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--color-neutral-10);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.lab-rung:hover {
+  color: var(--color-neutral-12);
+}
+
+.lab-rung[aria-pressed='true'] {
+  color: var(--color-accent-11);
+  border-top-color: var(--color-accent-9);
+}
+
+/* Style chips carry their key as a small superscript. */
+.lab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lab-chip-key {
+  font-family: var(--typo-code-font), monospace;
+  font-size: 0.625rem;
+  opacity: 0.6;
+}
+
+/* History strip: the last frames as small lightboxes. */
+.lab-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 5.5rem;
+  aspect-ratio: 1;
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: var(--color-neutral-3);
+  box-shadow: inset 0 0 0 1px var(--color-neutralA-4);
+  transition:
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.lab-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lab-thumb:hover {
+  transform: translateY(-1px);
+}
+
+.lab-thumb[aria-selected='true'] {
+  box-shadow:
+    inset 0 0 0 1px var(--color-neutralA-4),
+    0 0 0 2px var(--color-accent-9);
+}
+
+.lab-thumb-label {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 0.15rem 0.35rem;
+  background: rgb(0 0 0 / 0.45);
+  color: #fff;
+  font-size: 0.625rem;
+  line-height: 1.2;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* digo's TabsList scrolls on a 1 px overflow and shows a scrollbar stub. */
 [role='tablist'] {
   scrollbar-width: none;

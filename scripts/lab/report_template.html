@@ -1,0 +1,401 @@
+<title>Pictionary Lab · klein realtime</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  /* Layout: a lab notebook. One column of running text 68ch wide; the image grids break out to the full 1240px. */
+  :root {
+    --bg: #f4f2ec;
+    --panel: #fbfaf7;
+    --fg: #1c1b18;
+    --muted: #6d6962;
+    --line: #dcd8cf;
+    --accent: #1f8fd0;
+    --accent-ink: #0b4a70;
+    --warn: #c9821a;
+    --bad: #c0392b;
+    --paper: #ffffff;
+    --display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+    --body: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151514; --panel: #1e1e1c; --fg: #ecebe6; --muted: #a09c93; --line: #2f2e2b; --accent: #5cb8f2; --accent-ink: #bfe2fb; --warn: #e3a240; --bad: #e76f5f; --paper: #ffffff; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151514; --panel: #1e1e1c; --fg: #ecebe6; --muted: #a09c93; --line: #2f2e2b; --accent: #5cb8f2; --accent-ink: #bfe2fb; --warn: #e3a240; --bad: #e76f5f; --paper: #ffffff; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding-block: 2.5rem 5rem; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 3.5rem; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: -0.015em; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1; }
+  h2 { font-size: clamp(1.4rem, 3vw, 2rem); line-height: 1.1; }
+  h3 { font-size: 1.05rem; font-weight: 600; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .lede { font-size: 1.1rem; max-width: 62ch; }
+  a { color: var(--accent-ink); }
+  code { font-family: var(--mono); font-size: 0.85em; }
+  section { display: flex; flex-direction: column; gap: 1.25rem; }
+  .head { display: flex; flex-direction: column; gap: 1rem; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 0.5rem; }
+  .kpi { background: var(--panel); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+  .kpi b { font-family: var(--mono); font-weight: 600; font-size: 1.5rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .kpi span { font-size: 0.78rem; color: var(--muted); }
+  .note { color: var(--muted); font-size: 0.9rem; max-width: 68ch; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .tab { border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 0.35rem 0.85rem; font: inherit; font-size: 0.85rem; cursor: pointer; }
+  .tab[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .tab:focus-visible, .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; }
+  .group .eyebrow { width: 4.2rem; }
+  .scroller { overflow-x: auto; padding-bottom: 0.5rem; }
+  table.grid { border-collapse: separate; border-spacing: 4px; }
+  table.grid th { font-family: var(--mono); font-weight: 400; font-size: 0.7rem; color: var(--muted); text-align: left; padding: 0 0.2rem 0.2rem; vertical-align: bottom; white-space: nowrap; }
+  table.grid th small { display: block; color: var(--muted); opacity: 0.8; }
+  table.grid td { padding: 0; vertical-align: top; }
+  .tile { position: relative; display: block; width: 150px; aspect-ratio: 1; max-width: 100%; background: var(--panel); border: 0; padding: 0; cursor: pointer; overflow: hidden; border-radius: 4px; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.sketch { background: var(--paper); cursor: default; }
+  .tile .ms { position: absolute; right: 4px; bottom: 4px; font-family: var(--mono); font-size: 0.62rem; padding: 0.1rem 0.3rem; border-radius: 3px; background: rgba(0,0,0,0.55); color: #fff; }
+  .tile .ms.slow { background: var(--warn); color: #1c1b18; }
+  .tile .ms.bad { background: var(--bad); color: #fff; }
+  .miss { width: 150px; aspect-ratio: 1; background: var(--line); border-radius: 4px; }
+  .mech { display: flex; flex-direction: column; gap: 0.5rem; }
+  .prompt-box { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 0.8rem 1rem; font-family: var(--mono); font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; min-height: 3.2rem; }
+  .style-meta { display: grid; grid-template-columns: 1fr; gap: 0.6rem; max-width: 68ch; }
+  .style-meta dt { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .style-meta dd { margin: 0; }
+  .style-meta div { display: flex; flex-direction: column; gap: 0.15rem; }
+  table.data { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+  table.data th, table.data td { text-align: right; padding: 0.4rem 0.9rem 0.4rem 0; border-bottom: 1px solid var(--line); }
+  table.data th:first-child, table.data td:first-child { text-align: left; }
+  table.data th { font-weight: 500; color: var(--muted); font-size: 0.78rem; }
+  table.data td { font-family: var(--mono); font-size: 0.85rem; }
+  table.data td:first-child { font-family: var(--body); font-size: 0.9rem; }
+  .run { display: flex; flex-direction: column; gap: 0.6rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  .run h3 { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; }
+  .run h3 span { font-family: var(--mono); font-weight: 400; font-size: 0.8rem; color: var(--muted); }
+  .timeline { width: 100%; height: 70px; display: block; }
+  .strip { display: grid; grid-auto-flow: column; grid-auto-columns: 118px; gap: 4px; }
+  .strip figure { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+  .strip img { width: 118px; aspect-ratio: 1; object-fit: cover; display: block; border-radius: 3px; background: var(--paper); }
+  .strip figcaption { font-family: var(--mono); font-size: 0.62rem; color: var(--muted); white-space: nowrap; }
+  .bars { width: 100%; height: 150px; display: block; }
+  ul { margin: 0; padding-left: 1.2rem; max-width: 68ch; display: flex; flex-direction: column; gap: 0.5rem; }
+  .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.2rem; }
+  .videos figure { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+  .videos video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; display: block; }
+  .videos figcaption { font-size: 0.85rem; color: var(--muted); }
+  .videos figcaption b { color: var(--fg); font-weight: 600; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.78rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; vertical-align: -1px; margin-right: 0.3rem; }
+  @media (max-width: 640px) { .tile, .miss { width: 110px; } .strip { grid-auto-columns: 96px; } .strip img { width: 96px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="head">
+    <span class="eyebrow">AI Pictionary · re:Play 2026 · lab · 23 oct 2026</span>
+    <h1>klein realtime: AI Strength, 20 estilos y lo que tarda</h1>
+    <p class="lede" id="lede"></p>
+    <div class="kpis" id="kpis"></div>
+    <p class="note">Todo lo de esta página son renders reales de <code>fal-ai/flux-2/klein/realtime</code> por su WebSocket, con los seis bocetos de prueba del lab, semilla 35 y 3 pasos salvo donde se indica. Los tiempos son de ida y vuelta desde Madrid, un frame en vuelo cada vez. Pasa el ratón por un render para ver el prompt exacto; haz clic para dejarlo fijado abajo de su cuadrícula.</p>
+  </header>
+
+  <section id="ladder">
+    <span class="eyebrow">01 · AI Strength</span>
+    <h2>La escalera: del calco al prompt</h2>
+    <p>klein realtime no tiene <code>strength</code>: es un modelo de edición y el boceto entra como referencia, no como latente con ruido. El slider del lab se traduce en ocho redacciones de la frase de fidelidad. Por debajo de 0,38 el estilo se retira a «solo color y luz», porque si le pides a la vez «sigue las líneas» y «fotografíalo», klein hace una foto acabada siempre. A partir de 0,75 el boceto además llega desenfocado. Cada columna es un tramo del slider.</p>
+    <div class="tabs" id="ladder-tabs"></div>
+    <div class="scroller"><table class="grid" id="ladder-grid"></table></div>
+    <div class="prompt-box" id="ladder-prompt">Haz clic en un render para ver su prompt.</div>
+  </section>
+
+  <section id="mech">
+    <span class="eyebrow">02 · Qué más se probó como strength</span>
+    <h2>Los otros mandos del endpoint</h2>
+    <p>Antes de quedarse con las palabras se probaron los parámetros reales del socket y dos trucos de entrada, siempre con el mismo prompt medio y la casa y el gato. Lo que de verdad mueve la imagen es la redacción; el desenfoque ayuda en el tramo alto; el resto apenas cambia nada o estropea.</p>
+    <div id="mech-list"></div>
+  </section>
+
+  <section id="styles">
+    <span class="eyebrow">03 · Estilos</span>
+    <h2>Veinte tratamientos, ningún sustantivo</h2>
+    <p>Un estilo describe cómo se hace la imagen (cámara, material, técnica), su luz, su paleta y su fondo. No contiene ningún objeto que klein pudiera dibujar en lugar del boceto: por eso «Cartoon» ya no saca un juguete. Elige un estilo: cuatro bocetos × AI Strength 25, 55 y 85 con la pista escrita, y una cuarta columna a 55 sin pista.</p>
+    <div id="style-groups"></div>
+    <dl class="style-meta" id="style-meta"></dl>
+    <div class="scroller"><table class="grid" id="style-grid"></table></div>
+    <div class="prompt-box" id="style-prompt">Haz clic en un render para ver su prompt.</div>
+    <h3>Los veinte de un vistazo</h3>
+    <p class="note">El gato a AI Strength 55 con pista, uno por estilo, en el orden del catálogo.</p>
+    <div class="scroller"><table class="grid" id="style-overview"></table></div>
+  </section>
+
+  <section id="timing">
+    <span class="eyebrow">04 · Tiempos</span>
+    <h2>Lo que tarda y lo que se siente</h2>
+    <div class="two">
+      <div>
+        <h3>Frame a frame, socket caliente</h3>
+        <p class="note">Mismo boceto y prompt, 30 frames seguidos por configuración (12 a 1024 px).</p>
+        <table class="data" id="steady"></table>
+      </div>
+      <div>
+        <h3>Arranque</h3>
+        <p class="note">Primer frame en un socket recién abierto, tres veces seguidas con el runner ya despierto. El primer frame del día, con el runner frío, fue de 9,4 s en la prueba de humo de esta sesión.</p>
+        <table class="data" id="cold"></table>
+      </div>
+    </div>
+    <div class="run">
+      <h3>Cambiar de estilo en cada frame <span id="switch-stats"></span></h3>
+      <p class="note">24 frames seguidos, cada uno con un estilo distinto del catálogo. Cambiar el prompt no cuesta nada extra en el servidor: la barra es la latencia de cada frame.</p>
+      <svg class="bars" id="switch-bars" viewBox="0 0 1000 150" preserveAspectRatio="none" role="img" aria-label="Latencia por frame al cambiar de estilo"></svg>
+      <div class="scroller strip" id="switch-strip"></div>
+    </div>
+    <div id="drawing"></div>
+  </section>
+
+  <section id="videos">
+    <span class="eyebrow">05 · Vídeos a tiempo real</span>
+    <h2>Dibujar y ver, sin acelerar</h2>
+    <p>Grabaciones reales del bucle: el boceto aparece trazo a trazo (uno cada 150 ms, como una mano), un frame en vuelo cada vez, y cada frame se guarda con el instante exacto en que se envió y en que llegó. Tras el dibujo, barrido de AI Strength y recorrido de estilos. Las dos últimas llevan la escalera anclada (Fiel y Acabado con la pista como material).</p>
+    <div class="videos" id="video-grid"></div>
+  </section>
+
+  <section id="sd">
+    <span class="eyebrow">06 · StreamDiffusion</span>
+    <h2>El segundo motor: SDXL-Turbo por WebRTC</h2>
+    <p>Mismos estilos, misma pista y mismo slider, otra tecnología: el lienzo sale como vídeo continuo y vuelve estilizado a ~20 fps. El modelo recibe el trazo en blanco sobre negro como mapa de líneas (scribble) y AI Strength mueve el <code>t_index</code> (cuánto del dibujo sobrevive al ruido) y afloja el ControlNet. Aquí no hay escalera de frases: el prompt son etiquetas CLIP. Capturado del propio lab el 23 oct 2026.</p>
+    <div class="kpis" id="sd-kpis"></div>
+    <h3>Los veinte estilos, casa y gato</h3>
+    <div id="sd-groups"></div>
+    <div class="scroller"><table class="grid" id="sd-grid"></table></div>
+    <h3>AI Strength en StreamDiffusion</h3>
+    <p class="note">De 6 a 95 por los ocho peldaños del slider. A la izquierda el dibujo vuelve como calco teñido; hacia la derecha la pista construye el objeto. La banda útil es más estrecha que en klein.</p>
+    <div class="scroller"><table class="grid" id="sd-sweep"></table></div>
+    <h3>Tomas a tiempo real</h3>
+    <p class="note">Capturadas del lab a 8 fps mientras el test dibujaba el boceto; el vídeo de salida es continuo, así que no hay «frame en vuelo»: la imagen va cambiando bajo la mano.</p>
+    <div class="videos" id="sd-video-grid"></div>
+  </section>
+
+  <section id="findings">
+    <span class="eyebrow">07 · Hallazgos</span>
+    <h2>Lo que cambia en el lab a partir de hoy</h2>
+    <ul id="findings-list"></ul>
+  </section>
+</div>
+
+<script>
+  const DATA = /*__DATA__*/;
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => n == null ? '–' : Math.round(n).toLocaleString('es-ES');
+  const msClass = (ms) => ms == null ? '' : ms > 3000 ? 'bad' : ms > 1200 ? 'slow' : '';
+  const RANGES = ['0–12', '12–25', '25–38', '38–50', '50–62', '62–75', '75–88', '88–100'];
+
+  const tile = (cell, alt, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'tile';
+    if (!cell.src) { const d = document.createElement('div'); d.className = 'miss'; return d; }
+    b.innerHTML = `<img src="${cell.src}" alt="${alt}" loading="lazy" width="150" height="150">` + (cell.ms == null ? '' : `<span class="ms ${msClass(cell.ms)}">${fmt(cell.ms)} ms</span>`);
+    if (cell.prompt) b.title = cell.prompt;
+    b.addEventListener('click', () => onClick && onClick(cell));
+    return b;
+  };
+  const sketchTile = (name) => {
+    const d = document.createElement('div'); d.className = 'tile sketch';
+    d.innerHTML = `<img src="${DATA.sketches[name]}" alt="boceto ${DATA.words[name]}" width="150" height="150">`;
+    return d;
+  };
+
+  // ── header
+  const s = DATA.summary;
+  $('lede').textContent = `${s.frames} frames medidos en una tarde. Con la pista escrita y el socket caliente, un frame de 3 pasos tarda ${fmt(s.steady['3 pasos']?.p50)} ms (p50) y uno de 2 pasos ${fmt(s.steady['2 pasos']?.p50)} ms; mientras alguien dibuja, lo que ve va ${fmt(DATA.drawing.length ? DATA.drawing.reduce((a, r) => a + r.lag.p50, 0) / DATA.drawing.length : null)} ms por detrás de su mano. Los estilos ya no meten objetos y AI Strength tiene ocho peldaños medidos.`;
+  const kpis = [
+    [fmt(s.steady['3 pasos']?.p50) + ' ms', 'p50 por frame · 3 pasos · 768 px'],
+    [fmt(s.steady['2 pasos']?.p50) + ' ms', 'p50 por frame · 2 pasos'],
+    [fmt(s.steady['3 pasos · 1024 px']?.p50) + ' ms', 'p50 por frame · 3 pasos · 1024 px'],
+    [s.cold.length ? fmt(s.cold.reduce((a, c) => a + c.ms, 0) / s.cold.length) + ' ms' : '–', 'primer frame · socket nuevo, runner caliente'],
+    [fmt(s.switch?.p50) + ' ms', 'p50 cambiando de estilo cada frame'],
+    [fmt(s.e2_p50) + ' ms', `p50 de los ${s.e2_n} frames de la matriz de estilos (${s.outliers} de más de 3 s por runner frío)`],
+  ];
+  $('kpis').innerHTML = kpis.map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join('');
+
+  // ── ladder
+  let ladderStyle = 'photo';
+  const ladderTabs = $('ladder-tabs');
+  for (const [id, label] of [['photo', 'Foto natural'], ['watercolor', 'Acuarela']]) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'tab'; b.textContent = label;
+    b.setAttribute('aria-pressed', String(id === ladderStyle));
+    b.addEventListener('click', () => { ladderStyle = id; [...ladderTabs.children].forEach(c => c.setAttribute('aria-pressed', String(c === b))); renderLadder(); });
+    ladderTabs.appendChild(b);
+  }
+  function renderLadder() {
+    const t = $('ladder-grid'); t.innerHTML = '';
+    const head = document.createElement('tr');
+    head.innerHTML = '<th>boceto</th>' + DATA.rungs.map((r, i) => `<th>${r}<small>${RANGES[i]}</small></th>`).join('');
+    t.appendChild(head);
+    for (const row of DATA.ladder[ladderStyle]) {
+      const tr = document.createElement('tr');
+      const td0 = document.createElement('td'); td0.appendChild(sketchTile(row.sketch)); tr.appendChild(td0);
+      row.cells.forEach((cell, i) => { const td = document.createElement('td'); td.appendChild(tile(cell, `${DATA.words[row.sketch]} · ${DATA.rungs[i]}`, c => { $('ladder-prompt').textContent = c.prompt; })); tr.appendChild(td); });
+      t.appendChild(tr);
+    }
+  }
+  renderLadder();
+
+  // ── mech
+  const mechList = $('mech-list');
+  for (const [family, { rows, note }] of Object.entries(DATA.mech)) {
+    const box = document.createElement('div'); box.className = 'mech';
+    box.innerHTML = `<h3>${family}</h3><p class="note">${note}</p>`;
+    const sc = document.createElement('div'); sc.className = 'scroller';
+    const t = document.createElement('table'); t.className = 'grid';
+    const head = document.createElement('tr'); head.innerHTML = '<th>boceto</th>' + rows[0].cells.map(c => `<th>${c.tag.replace(/^[A-Z]-/, '')}</th>`).join(''); t.appendChild(head);
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      const td0 = document.createElement('td'); td0.appendChild(sketchTile(row.sketch)); tr.appendChild(td0);
+      for (const cell of row.cells) { const td = document.createElement('td'); td.appendChild(tile(cell, `${DATA.words[row.sketch]} · ${cell.tag}`)); tr.appendChild(td); }
+      t.appendChild(tr);
+    }
+    sc.appendChild(t); box.appendChild(sc); mechList.appendChild(box);
+  }
+
+  // ── styles
+  const GROUPS = { photo: 'Foto', material: 'Materia', art: 'Arte' };
+  let styleId = DATA.styles[0].id;
+  const groupsBox = $('style-groups');
+  for (const [gid, glabel] of Object.entries(GROUPS)) {
+    const g = document.createElement('div'); g.className = 'group';
+    g.innerHTML = `<span class="eyebrow">${glabel}</span>`;
+    for (const st of DATA.styles.filter(x => x.group === gid)) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'tab'; b.dataset.id = st.id; b.textContent = st.label;
+      b.addEventListener('click', () => { styleId = st.id; renderStyle(); });
+      g.appendChild(b);
+    }
+    groupsBox.appendChild(g);
+  }
+  function renderStyle() {
+    document.querySelectorAll('#style-groups .tab').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === styleId)));
+    const st = DATA.styles.find(x => x.id === styleId);
+    $('style-meta').innerHTML = `<div><dt>look</dt><dd>${st.look}.</dd></div><div><dt>luz · paleta · fondo</dt><dd>${st.light} · ${st.palette} · ${st.backdrop}</dd></div><div><dt>p50 en esta matriz</dt><dd>${fmt(st.p50)} ms</dd></div>`;
+    const t = $('style-grid'); t.innerHTML = '';
+    const head = document.createElement('tr'); head.innerHTML = '<th>boceto</th><th>AI Strength 25<small>Coloreado</small></th><th>AI Strength 55<small>Acabado</small></th><th>AI Strength 85<small>Libre</small></th><th>55 sin pista<small>solo el dibujo</small></th>'; t.appendChild(head);
+    for (const row of st.rows) {
+      const tr = document.createElement('tr');
+      const td0 = document.createElement('td'); td0.appendChild(sketchTile(row.sketch)); tr.appendChild(td0);
+      for (const cell of row.cells) { const td = document.createElement('td'); td.appendChild(tile(cell, `${st.label} · ${DATA.words[row.sketch]} · ${cell.label}`, c => { $('style-prompt').textContent = c.prompt; })); tr.appendChild(td); }
+      t.appendChild(tr);
+    }
+  }
+  renderStyle();
+  const ov = $('style-overview');
+  const ovRows = [DATA.styles.slice(0, 10), DATA.styles.slice(10)];
+  for (const group of ovRows) {
+    const head = document.createElement('tr'); head.innerHTML = group.map(st => `<th>${st.label}</th>`).join(''); ov.appendChild(head);
+    const tr = document.createElement('tr');
+    for (const st of group) { const cell = st.rows[1].cells[1]; const td = document.createElement('td'); td.appendChild(tile(cell, `${st.label} · gato · 55`, c => { $('style-prompt').textContent = c.prompt; })); tr.appendChild(td); }
+    ov.appendChild(tr);
+  }
+
+  // ── timing
+  const steady = $('steady');
+  steady.innerHTML = '<tr><th>configuración</th><th>n</th><th>p50</th><th>p90</th><th>mín</th><th>máx</th></tr>' + Object.entries(s.steady).map(([k, v]) => `<tr><td>${k}</td><td>${v.n}</td><td>${fmt(v.p50)}</td><td>${fmt(v.p90)}</td><td>${fmt(v.min)}</td><td>${fmt(v.max)}</td></tr>`).join('');
+  $('cold').innerHTML = '<tr><th>socket</th><th>apretón de manos</th><th>primer frame</th></tr>' + s.cold.map((c, i) => `<tr><td>#${i + 1}</td><td>${fmt(c.open_ms)} ms</td><td>${fmt(c.ms)} ms</td></tr>`).join('');
+
+  $('switch-stats').textContent = s.switch ? `p50 ${fmt(s.switch.p50)} ms · p90 ${fmt(s.switch.p90)} ms · mín ${fmt(s.switch.min)} · máx ${fmt(s.switch.max)}` : '';
+  const sw = $('switch-bars'); const n = DATA.switch.length; const ceil = 1500;
+  let svg = '';
+  for (const g of [500, 1000]) svg += `<line x1="0" x2="1000" y1="${150 - g / ceil * 140}" y2="${150 - g / ceil * 140}" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/><text x="4" y="${150 - g / ceil * 140 - 3}" font-size="10" fill="var(--muted)" font-family="var(--mono)">${g} ms</text>`;
+  DATA.switch.forEach((f, i) => { const h = Math.min(f.ms, ceil) / ceil * 140; const x = i * (1000 / n); svg += `<rect x="${x + 3}" y="${150 - h}" width="${1000 / n - 6}" height="${h}" fill="${f.cold ? 'var(--warn)' : 'var(--accent)'}"><title>${f.style} · ${f.ms} ms</title></rect>`; });
+  sw.innerHTML = svg;
+  const swStrip = $('switch-strip');
+  swStrip.innerHTML = DATA.switch.map(f => f.src ? `<figure><img src="${f.src}" alt="${f.style}" loading="lazy"><figcaption>${f.style} · ${f.ms} ms</figcaption></figure>` : '').join('');
+
+  const dr = $('drawing');
+  const intro = document.createElement('div'); intro.className = 'run';
+  intro.innerHTML = `<h3>Dibujando en directo: un trazo nuevo cada ${s.stage_ms} ms</h3><p class="note">Grabación del bucle tal como lo hace la app: el boceto aparece por etapas (una cada ${s.stage_ms} ms, como una mano que dibuja) y el bucle manda la etapa más nueva en cuanto el frame anterior llega, un frame en vuelo. Arriba, lo que había en el papel; abajo, lo que vio el público y cuándo. El «retraso» es lo que iba por detrás de la mano la imagen que se mostró: latencia del frame más el tiempo que esa etapa esperó su turno.</p><div class="legend"><span><i style="background:var(--line)"></i>etapa disponible</span><span><i style="background:var(--accent)"></i>frame en pantalla</span></div>`;
+  dr.appendChild(intro);
+  for (const run of DATA.drawing) {
+    const box = document.createElement('div'); box.className = 'run';
+    const total = Math.max(...run.frames.map(f => f.shown_at)) + 200;
+    const X = (t) => 20 + t / total * 960;
+    let tl = '';
+    for (let k = 0; k < 10; k += 1) { const x = X(k * s.stage_ms); tl += `<line x1="${x}" x2="${x}" y1="10" y2="30" stroke="var(--line)" stroke-width="2"/><text x="${x + 3}" y="20" font-size="9" fill="var(--muted)" font-family="var(--mono)">${k + 1}</text>`; }
+    for (const f of run.frames) { const x0 = X(f.sent_at), x1 = X(f.shown_at); tl += `<rect x="${x0}" y="36" width="${Math.max(2, x1 - x0)}" height="14" fill="var(--accent)" opacity="0.35"/><line x1="${x1}" x2="${x1}" y1="32" y2="56" stroke="var(--accent)" stroke-width="2"/><text x="${x1 + 3}" y="66" font-size="9" fill="var(--muted)" font-family="var(--mono)">e${f.stage} +${f.lag_ms}</text>`; }
+    box.innerHTML = `<h3>${DATA.words[run.sketch]} · ${run.style === 'photo' ? 'Foto natural' : 'Arcilla'} <span>${run.frames.length} frames para 10 etapas · frame p50 ${fmt(run.stats.p50)} ms · retraso p50 ${fmt(run.lag.p50)} ms, máx ${fmt(run.lag.max)} ms</span></h3><svg class="timeline" viewBox="0 0 1000 70" preserveAspectRatio="none" role="img" aria-label="Línea de tiempo">${tl}</svg>`;
+    const top = document.createElement('div'); top.className = 'scroller strip';
+    top.innerHTML = run.frames.map(f => `<figure><img src="${f.stage_src}" alt="etapa ${f.stage}" loading="lazy"><figcaption>etapa ${f.stage} · ${f.stage_at} ms</figcaption></figure>`).join('');
+    const bottom = document.createElement('div'); bottom.className = 'scroller strip';
+    bottom.innerHTML = run.frames.map(f => f.src ? `<figure><img src="${f.src}" alt="frame ${f.stage}" loading="lazy" title="${run.prompt}"><figcaption>en pantalla ${f.shown_at} ms · +${f.lag_ms}</figcaption></figure>` : '<figure><div class="miss"></div></figure>').join('');
+    box.appendChild(top); box.appendChild(bottom); dr.appendChild(box);
+  }
+
+  // ── videos
+  const videoCard = ([src, title, note]) => `<figure><video src="${src}" controls preload="metadata" playsinline muted></video><figcaption><b>${title}</b> · ${note}</figcaption></figure>`;
+  $('video-grid').innerHTML = DATA.videos.map(videoCard).join('');
+  $('sd-video-grid').innerHTML = DATA.sd_videos.map(videoCard).join('');
+
+  // ── streamdiffusion
+  const sdStats = Object.values(DATA.sd.records).map(r => r.stats).find(x => x && x.tape) || Object.values(DATA.sd.stats).find(x => x && x.tape);
+  const sdHeader = (sdStats && sdStats.header) || '';
+  const fpsMatch = sdHeader.match(/([\d,]+) fps/);
+  const msMatch = sdHeader.match(/([\d.]+) ms/);
+  $('sd-kpis').innerHTML = [
+    [fpsMatch ? fpsMatch[1] + ' fps' : '–', 'vídeo de salida, medido en el lab'],
+    [msMatch ? msMatch[1] + ' ms' : '–', 'de extremo a extremo, p50 de la sonda (tecla L)'],
+    [sdStats && sdStats.tape ? sdStats.tape[1] : '–', 'p90 de la sonda'],
+    [sdStats && sdStats.tape ? sdStats.tape[2] : '–', 'primer frame desde crear el stream'],
+    [DATA.sd.matrix.length * 6, 'capturas de la matriz (20 estilos × 2 bocetos × 3 strengths)'],
+  ].map(([v, l]) => `<div class="kpi"><b>${v}</b><span>${l}</span></div>`).join('');
+  let sdStyle = DATA.sd.matrix[0].id;
+  const sdGroups = $('sd-groups');
+  for (const [gid, glabel] of Object.entries(GROUPS)) {
+    const g = document.createElement('div'); g.className = 'group';
+    g.innerHTML = `<span class="eyebrow">${glabel}</span>`;
+    for (const st of DATA.sd.matrix.filter(x => x.group === gid)) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'tab'; b.dataset.id = st.id; b.textContent = st.label;
+      b.addEventListener('click', () => { sdStyle = st.id; renderSd(); });
+      g.appendChild(b);
+    }
+    sdGroups.appendChild(g);
+  }
+  function renderSd() {
+    document.querySelectorAll('#sd-groups .tab').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === sdStyle)));
+    const st = DATA.sd.matrix.find(x => x.id === sdStyle);
+    const t = $('sd-grid'); t.innerHTML = '';
+    const head = document.createElement('tr'); head.innerHTML = '<th>boceto</th>' + st.rows[0].cells.map(c => `<th>AI Strength ${c.label}</th>`).join('') + `<th>tags CLIP<small>${st.tags}</small></th>`; t.appendChild(head);
+    for (const row of st.rows) {
+      const tr = document.createElement('tr');
+      const td0 = document.createElement('td'); td0.appendChild(sketchTile(row.sketch)); tr.appendChild(td0);
+      for (const cell of row.cells) { const td = document.createElement('td'); td.appendChild(tile({ ...cell, ms: null }, `${st.label} · ${DATA.words[row.sketch]} · ${cell.label}`)); tr.appendChild(td); }
+      t.appendChild(tr);
+    }
+  }
+  renderSd();
+  const sw2 = $('sd-sweep');
+  for (const sweep of DATA.sd.sweeps) {
+    const head = document.createElement('tr'); head.innerHTML = `<th>${DATA.words[sweep.sketch]} · ${sweep.style}</th>` + sweep.cells.map(c => `<th>${c.label}</th>`).join(''); sw2.appendChild(head);
+    const tr = document.createElement('tr');
+    const td0 = document.createElement('td'); td0.appendChild(sketchTile(sweep.sketch)); tr.appendChild(td0);
+    for (const cell of sweep.cells) { const td = document.createElement('td'); td.appendChild(tile({ ...cell, ms: null }, `${sweep.style} ${cell.label}`)); tr.appendChild(td); }
+    sw2.appendChild(tr);
+  }
+
+  // ── findings
+  const findings = [
+    'AI Strength funciona como el de Krea, pero con palabras: ocho peldaños (Calco, Coloreado, Recorte, Fiel, Acabado, Limpio, Libre, Prompt). Por debajo de 0,38 el modelo devuelve el dibujo teñido o coloreado; de 0,38 a 0,75 lo convierte en objeto respetando el trazo; por encima rediseña y el boceto llega desenfocado.',
+    'Con un estilo fotográfico y la pista escrita, klein hace una foto acabada en cualquier peldaño medio: la fidelidad al trazo se nota en la composición, no en la textura. Sin pista, los estilos de foto devuelven el dibujo convertido en un objeto blanco con las líneas pintadas; los de materia y arte interpretan el trazo solos.',
+    'La pista manda: un círculo solo, con «cat» y Foto natural, ya es un gato completo en el primer frame. Para el juego, la pista es lo que decide si el público ve la respuesta antes de tiempo.',
+    'Ningún estilo mete objetos: el catálogo describe cómo se hace la imagen (cámara, material, técnica), luz, paleta y fondo, y los sustantivos de objeto quedan prohibidos. Cartoon da un cartoon plano, Cromo un cromado, sin juguetes ni ositos.',
+    'Desenfocar el boceto suelta la forma (más ventanas, otro gato): se usa en el tramo alto. schedule_mu no cambia nada visible. Los pasos cambian más la latencia que la imagen. La memoria (output_feedback_strength) por encima de 0,3 acumula manchas: tope en 0,3.',
+    `En caliente: ${fmt(s.steady['1 paso']?.p50)} ms a 1 paso, ${fmt(s.steady['2 pasos']?.p50)} a 2, ${fmt(s.steady['3 pasos']?.p50)} a 3, ${fmt(s.steady['3 pasos · 1024 px']?.p50)} a 3 y 1024 px. Cambiar de estilo en cada frame no cuesta nada. Un socket nuevo sobre runner caliente responde en ~1 s; sobre runner frío, 9-17 s: por eso el lab calienta el socket de reserva con el último frame antes de rotarlo.`,
+    'Mientras alguien dibuja, con un frame en vuelo, la imagen va de 0,8 a 1,5 s por detrás de la mano (p50 ≈ 1,1 s); cada frame lleva entre una y dos etapas de dibujo. Es la sensación real del directo por cloud con este modelo.',
+    'Escalera anclada (vídeos 07 y 08): con Fiel y Acabado redactados como «la tinta es el único sujeto, textúrala como los materiales de X», klein deja de completar el objeto desde un trazo y la imagen crece con el dibujo, que era lo que hacía Krea. A partir de Limpio la pista vuelve a mandar.',
+    'StreamDiffusion (SDXL-Turbo en Daydream) va a ~20 fps con ~350 ms de extremo a extremo: la sensación de directo es otra, el render cambia bajo la mano. A cambio la imagen es más pequeña y plana (512 px, 1-2 pasadas), la banda útil de AI Strength es más estrecha y el trazo blanco sobre negro deja el fondo oscuro en casi todos los estilos. Su sitio natural es el tramo bajo y medio del slider; klein gana en el alto y en calidad de foto.',
+  ];
+  $('findings-list').innerHTML = findings.map(f => `<li>${f}</li>`).join('');
+</script>

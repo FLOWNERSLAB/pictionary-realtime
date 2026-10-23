@@ -1,14 +1,14 @@
-import type { Billing, LiveModel } from '../data/models';
+import { MODEL } from '../data/model';
 
 export type Metrics = {
   sent: number;
   received: number;
   errors: number;
-  /** Frames written off after the timeout. */
+  /** Frames written off after the stall timeout. */
   timedOut: number;
   /** Frames lost because fal closed the socket under them; resent at once. */
   dropped: number;
-  /** Frames the provider's safety filter returned black. They are not shown. */
+  /** Frames fal's safety filter returned black. They are not shown. */
   blocked: number;
   /** Round trip of each frame, newest last. */
   samples: number[];
@@ -76,11 +76,11 @@ const throughput = (arrivals: number[]) => {
 };
 
 /**
- * `skipFirst`: in a request loop the first answer carries the cold start, which has
- * its own read-out. A streamed model measures cold start apart, so all samples count.
+ * `skipFirst`: in the request loop the first answer carries the cold start, which has
+ * its own read-out. A streamed model measures cold start apart, so all samples count,
+ * and it shows frames long before any latency is measured.
  */
 export const summarize = ({ samples, arrivals }: Metrics, skipFirst = true): MetricsSummary => {
-  // A stream shows frames long before any latency is measured.
   if (!samples.length) return { average: 0, p50: 0, p90: 0, min: 0, max: 0, fps: throughput(arrivals) };
 
   const steady = skipFirst && samples.length > 1 ? samples.slice(1) : samples;
@@ -96,31 +96,6 @@ export const summarize = ({ samples, arrivals }: Metrics, skipFirst = true): Met
   };
 };
 
-export const estimateCost = (billing: Billing, metrics: Metrics) => {
-  if (billing.unit === 'compute-second' && billing.usd) return billing.usd * metrics.sessionSeconds;
-  if (billing.unit === 'image' && billing.usd) return billing.usd * metrics.received;
-
-  return null;
-};
+export const estimateCost = (metrics: Metrics) => MODEL.usdPerSecond * metrics.sessionSeconds;
 
 export const format = (value: number, digits = 0) => value.toFixed(digits).replace('.', ',');
-
-/** A row ready to paste into the results table of "Modelos en tiempo real - Comparativa". */
-export const toMarkdownRow = (model: LiveModel, metrics: Metrics, preset: string) => {
-  const { average, p50, fps } = summarize(metrics);
-  const cost = estimateCost(model.billing, metrics);
-  const costCell = cost === null ? model.billing.note : `~${format(cost, 3)} $ en ${format(metrics.sessionSeconds)} s`;
-
-  return [
-    `| ${model.label} (${model.engine})`,
-    `${format(average)} ms (p50 ${format(p50)})`,
-    format(fps, 1),
-    '',
-    '',
-    '',
-    costCell,
-    `fal cloud · ${model.inputSize} px · preset ${preset}`,
-    `${metrics.received}/${metrics.sent} frames, ${metrics.timedOut} caducados, ${metrics.blocked} bloqueados, ${metrics.errors} errores`,
-    ' |',
-  ].join(' | ');
-};

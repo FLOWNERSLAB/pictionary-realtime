@@ -1,18 +1,8 @@
-import { fal } from '@fal-ai/client';
-
 /**
- * Every request goes through api/lab.ts (Vite in dev, a Vercel Function when
- * deployed), which attaches FAL_KEY server side. The browser bundle never sees the key.
+ * What the browser needs from fal, without the official client: a realtime token
+ * from our server (api/lab.ts) and a reader for the frames the socket returns.
  */
-fal.config({ proxyUrl: '/api/fal/proxy' });
 
-export { fal };
-
-/**
- * Mints the realtime token on the server (api/lab.ts). The generic proxy cannot do it:
- * fal drops `allowed_apps` when the request is proxied, and the socket then
- * answers `Forbidden` on the first frame.
- */
 export const realtimeToken = async (app: string) => {
   const response = await fetch('/api/fal/token', {
     method: 'POST',
@@ -25,44 +15,38 @@ export const realtimeToken = async (app: string) => {
   return response.text();
 };
 
-type FalImage = {
-  url?: string;
-  content?: unknown;
-  content_type?: string;
-  width?: number;
-  height?: number;
+export const hasFalKey = async () => {
+  try {
+    const { hasKey } = (await (await fetch('/api/fal/status')).json()) as { hasKey?: boolean };
+
+    return Boolean(hasKey);
+  } catch {
+    return false;
+  }
 };
 
-const toBlobUrl = (content: unknown, contentType = 'image/jpeg') => {
-  if (content instanceof Uint8Array || content instanceof ArrayBuffer)
-    return URL.createObjectURL(new Blob([content as BlobPart], { type: contentType }));
-
-  if (typeof content === 'string') return `data:${contentType};base64,${content}`;
-
-  return null;
-};
+type FalImage = { url?: string; content?: unknown; content_type?: string };
 
 /**
- * fal returns three different image shapes: a hosted `url`, raw bytes over the
- * realtime socket (`content` as Uint8Array), or base64 in `content`.
+ * The realtime socket answers with raw JPEG bytes in `images[0].content`; a base64
+ * string or a hosted `url` are handled too, in case the shape changes.
  */
 export const imageUrlFromResult = (result: unknown): string | null => {
-  const images = (result as { images?: FalImage[] } | undefined)?.images;
-  const image = images?.[0];
+  const image = (result as { images?: FalImage[] } | undefined)?.images?.[0];
 
   if (!image) return null;
   if (image.url) return image.url;
 
-  return toBlobUrl(image.content, image.content_type);
+  const type = image.content_type ?? 'image/jpeg';
+
+  if (image.content instanceof Uint8Array || image.content instanceof ArrayBuffer)
+    return URL.createObjectURL(new Blob([image.content as BlobPart], { type }));
+  if (typeof image.content === 'string') return `data:${type};base64,${image.content}`;
+
+  return null;
 };
 
-type ValidationDetail = { msg?: string; loc?: (string | number)[] };
-
-/**
- * fal's safety checker false-positives on these sketch renders and answers with a
- * fully black image instead of an error. Z-Image ignores `enable_safety_checker`,
- * so the only way to know is to look at the pixels.
- */
+/** A fully black frame is a safety-filter answer, not a render: it must not replace the last good one. */
 export const isBlankFrame = (url: string) =>
   new Promise<boolean>(resolve => {
     const image = new Image();
@@ -90,20 +74,8 @@ export const isBlankFrame = (url: string) =>
     image.src = url;
   });
 
-export const flaggedAsNsfw = (result: unknown) =>
-  Boolean((result as { has_nsfw_concepts?: boolean[] } | undefined)?.has_nsfw_concepts?.some(Boolean));
-
 export const errorMessage = (error: unknown) => {
   if (!error) return 'Error desconocido';
-
-  const detail = (error as { body?: { detail?: unknown } }).body?.detail;
-
-  if (typeof detail === 'string') return detail;
-
-  if (Array.isArray(detail))
-    return (detail as ValidationDetail[])
-      .map(item => `${item.loc?.slice(-1)[0] ?? 'input'}: ${item.msg ?? JSON.stringify(item)}`)
-      .join(' · ');
 
   return (error as Error).message ?? String(error);
 };

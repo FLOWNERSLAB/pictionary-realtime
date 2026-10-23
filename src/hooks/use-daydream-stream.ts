@@ -1,15 +1,14 @@
 import { createBroadcast, createPlayer } from '@daydreamlive/browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { InputLook, LiveModel } from '../data/models';
-import { isDarkLook } from '../data/models';
+import type { InputLook } from '../data/stream';
+import { isDarkLook } from '../data/stream';
 import type { Metrics } from '../lib/metrics';
 import { EMPTY_METRICS } from '../lib/metrics';
 import { rasterizeSvg } from '../lib/raster';
 import type { LivePhase } from './use-live-render';
 
 export type DaydreamStreamOptions = {
-  model: LiveModel;
   enabled: boolean;
   /** Stream params from `model.buildInput`: created with them, hot-patched when they change. */
   params: Record<string, unknown>;
@@ -263,8 +262,8 @@ export const useDaydreamStream = (options: DaydreamStreamOptions) => {
   const arrivals = useRef<number[]>([]);
   const probeAbort = useRef<AbortController | null>(null);
 
-  const { model, enabled } = options;
-  const active = enabled && model.provider === 'daydream';
+  const { enabled } = options;
+  const active = enabled;
 
   const clearMetrics = useCallback(() => {
     arrivals.current = [];
@@ -578,7 +577,7 @@ export const useDaydreamStream = (options: DaydreamStreamOptions) => {
       setWaitingMs(0);
       setMetrics(EMPTY_METRICS);
     };
-  }, [active, model.id]);
+  }, [active]);
 
   const wanted = JSON.stringify(snapshot(patchParams(options.params)));
   /** One PATCH at a time: two in flight can land in the wrong order and leave the old value on. */

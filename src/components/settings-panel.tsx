@@ -1,300 +1,231 @@
 import { Slider, Switch } from '@digo-labs/ui';
 import type { ReactNode } from 'react';
 
-import type { ControlNetKind, LiveModel, StreamSettings } from '../data/models';
-import { CONTROLNET_COPY, LINE_PREPROCESSORS, STREAM_RECIPES, inputKept, isTurbo } from '../data/models';
+import type { Settings } from '../data/model';
+import { MEMORY_MAX, MODEL } from '../data/model';
+import type { ControlNetKind, StreamSettings } from '../data/stream';
+import { CONTROLNET_COPY, INPUT_LOOKS, LINE_PREPROCESSORS, STREAM_RECIPES, inputKept, streamForStrength } from '../data/stream';
 import { format } from '../lib/metrics';
+import { TEST_SKETCHES } from '../lib/test-sketch';
 
-export type LiveSettings = {
-  steps: number;
-  strength: number;
-  /** klein realtime: share of the previous frame's latent carried into the next. */
-  memory: number;
-  throttleMs: number;
-  seed: number;
-  scheduleMu: number;
-  interpolate: boolean;
-  hd: boolean;
-  guardSilhouette: boolean;
-  /** StreamDiffusion (Daydream) only. */
-  stream: StreamSettings;
-};
+export type Engine = 'klein' | 'stream';
 
 type SettingsPanelProps = {
-  model: LiveModel;
-  settings: LiveSettings;
-  onChange: (next: Partial<LiveSettings>) => void;
+  engine: Engine;
+  settings: Settings;
+  onChange: (next: Partial<Settings>) => void;
+  stream: StreamSettings;
+  onStream: (next: Partial<StreamSettings>) => void;
+  strength: number;
+  testSketchId: string;
+  onTestSketch: (id: string) => void;
+  prompt: string;
 };
 
-const GUIDE_COPY = {
-  strength: {
-    label: 'Libertad frente al trazo',
-    hint: 'Alto: el modelo se inventa más. Bajo: calca tu dibujo.',
-  },
-  control: {
-    label: 'Fidelidad a las líneas',
-    hint: 'Peso del ControlNet canny sobre tus trazos.',
-  },
-  memory: {
-    label: 'Memoria del frame anterior',
-    hint: 'Mezcla el frame anterior en el siguiente: menos parpadeo, más arrastre.',
-  },
-} as const;
-
-export const SettingsPanel = ({ model, settings, onChange }: SettingsPanelProps) => {
-  const guide = model.guide ? GUIDE_COPY[model.guide] : null;
-  const isKleinRealtime = model.id === 'klein-realtime';
-  const { stream } = settings;
-  const setStream = (next: Partial<StreamSettings>) => onChange({ stream: { ...stream, ...next } });
+export const SettingsPanel = ({ engine, settings, onChange, stream, onStream, strength, testSketchId, onTestSketch, prompt }: SettingsPanelProps) => {
   const setControlNet = (kind: ControlNetKind, next: Partial<StreamSettings['controlnets'][ControlNetKind]>) =>
-    setStream({ controlnets: { ...stream.controlnets, [kind]: { ...stream.controlnets[kind], ...next } } });
-  const kept = (index: number) => Math.round(inputKept(index, stream.steps) * 100);
-  const setIndex = (position: number, value: number) =>
-    setStream({ tIndex: stream.tIndex.map((index, at) => (at === position ? value : index)) });
-  const setPasses = (count: number) => {
-    const current = stream.tIndex;
-    const last = current[current.length - 1] ?? 30;
-
-    setStream({
-      tIndex:
-        count <= current.length
-          ? current.slice(0, count)
-          : [...current, ...Array.from({ length: count - current.length }, (_, extra) => Math.min(last + 5 * (extra + 1), stream.steps - 1))],
-    });
-  };
+    onStream({ controlnets: { ...stream.controlnets, [kind]: { ...stream.controlnets[kind], ...next } } });
+  const derived = streamForStrength(strength, stream);
 
   return (
     <div className="flex flex-col gap-6">
-      <Group title="Modelo">
-        <p className="text-neutral-11 text-sm">{model.notes}</p>
-        <dl className="text-neutral-10 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-          <dt>Endpoint</dt>
-          <dd className="text-neutral-12 truncate font-mono">{model.endpoint}</dd>
-          <dt>Entrada</dt>
-          <dd className="text-neutral-12 font-mono">{model.inputSize} px JPEG</dd>
-          <dt>Tarifa</dt>
-          <dd className="text-neutral-12">{model.billing.note}</dd>
-        </dl>
-      </Group>
+      {engine === 'klein' ? (
+        <>
+          <Group title="Generación">
+            <Control
+              label="Pasos"
+              value={String(settings.steps)}
+              hint="1 paso ~0,45 s, 2 ~0,55 s, 3 ~0,7 s, 6 ~1 s por frame (23 oct). Con 1-2 la imagen es más plana; con 3 ya hay detalle."
+            >
+              <Slider value={settings.steps} min={MODEL.steps.min} max={MODEL.steps.max} step={1} onValueChange={value => onChange({ steps: Number(value) })} />
+            </Control>
 
-      <Group title="Generación">
-        {model.steps.min === model.steps.max ? null : (
-          <Control label="Pasos" value={String(settings.steps)} hint={model.steps.allowed ? `Solo ${model.steps.allowed.join(', ')}` : undefined}>
-            <Slider
-              value={settings.steps}
-              min={model.steps.min}
-              max={model.steps.max}
-              step={1}
-              onValueChange={value => onChange({ steps: Number(value) })}
+            <Control
+              label="Memoria del frame anterior"
+              value={format(settings.memory, 2)}
+              hint="Mezcla el latente del frame anterior: menos parpadeo, algo de arrastre. Por encima de 0,3 acumula manchas de color (medido el 23 oct), así que el tope es ese."
+            >
+              <Slider value={settings.memory} min={0} max={MEMORY_MAX} step={0.05} onValueChange={value => onChange({ memory: Number(value) })} />
+            </Control>
+
+            <Control label="Semilla" value={String(settings.seed)} hint="Fija: el mismo dibujo da el mismo resultado, sin parpadeo entre frames.">
+              <Slider value={settings.seed} min={1} max={999} step={1} onValueChange={value => onChange({ seed: Number(value) })} />
+            </Control>
+
+            <Toggle
+              label="Fondo del estilo"
+              hint="Añade al prompt el fondo liso de cada estilo: evita que un garabato suelto crezca hasta ser una escena."
+              checked={settings.backdrop}
+              onChange={backdrop => onChange({ backdrop })}
             />
-          </Control>
-        )}
+          </Group>
 
-        {guide ? (
-          <Control
-            label={guide.label}
-            value={format(model.guide === 'memory' ? settings.memory : settings.strength, 2)}
-            hint={guide.hint}
-          >
-            <Slider
-              value={model.guide === 'memory' ? settings.memory : settings.strength}
-              min={model.guide === 'memory' ? 0 : 0.05}
-              max={model.guide === 'memory' ? 0.9 : 1}
-              step={0.05}
-              onValueChange={value =>
-                onChange(model.guide === 'memory' ? { memory: Number(value) } : { strength: Number(value) })
-              }
+          <Group title="klein realtime">
+            <Control label="Schedule μ" value={format(settings.scheduleMu, 1)} hint="Reparte el denoise entre pasos. Medido el 23 oct: entre 0,3 y 2,3 apenas cambia la imagen.">
+              <Slider value={settings.scheduleMu} min={0.3} max={2.5} step={0.1} onValueChange={value => onChange({ scheduleMu: Number(value) })} />
+            </Control>
+            <Toggle label="Salida 1024 px" hint="square_hd en lugar de 768 px. Más nítido, más lento." checked={settings.hd} onChange={hd => onChange({ hd })} />
+            <Toggle
+              label="Interpolación RIFE"
+              hint="fal intercala un frame entre dos consecutivos: más fluidez, algo más de latencia."
+              checked={settings.interpolate}
+              onChange={interpolate => onChange({ interpolate })}
             />
-          </Control>
-        ) : null}
-
-        <Control label="Semilla" value={String(settings.seed)} hint="Fija: el mismo dibujo da el mismo resultado, sin parpadeo entre frames.">
-          <Slider value={settings.seed} min={1} max={999} step={1} onValueChange={value => onChange({ seed: Number(value) })} />
-        </Control>
-
-        <Toggle
-          label="Proteger la silueta"
-          hint="Añade el fondo liso de cada estilo y, en klein, la orden de seguir el trazo sin añadir nada. Evita que el modelo invente una escena alrededor."
-          checked={settings.guardSilhouette}
-          onChange={guardSilhouette => onChange({ guardSilhouette })}
-        />
-      </Group>
-
-      {isKleinRealtime ? (
-        <Group title="klein realtime">
-          <Control label="Schedule μ" value={format(settings.scheduleMu, 1)} hint="Reparte el denoise. Más bajo, cambios más suaves.">
-            <Slider value={settings.scheduleMu} min={0.3} max={2.5} step={0.1} onValueChange={value => onChange({ scheduleMu: Number(value) })} />
-          </Control>
-          <Toggle
-            label="Interpolación RIFE"
-            hint="fal intercala frames: más fluidez, algo más de latencia."
-            checked={settings.interpolate}
-            onChange={interpolate => onChange({ interpolate })}
-          />
-          <Toggle
-            label="Salida 1024 px"
-            hint="square_hd en lugar de 768 px."
-            checked={settings.hd}
-            onChange={hd => onChange({ hd })}
-          />
-        </Group>
-      ) : null}
-
-      {model.provider === 'daydream' ? (
+            <Control label="Espera mínima entre frames" value={`${settings.throttleMs} ms`} hint="Solo hay un frame en vuelo: esto es un tope inferior, no una cadencia.">
+              <Slider value={settings.throttleMs} min={0} max={1000} step={16} onValueChange={value => onChange({ throttleMs: Number(value) })} />
+            </Control>
+          </Group>
+        </>
+      ) : (
         <>
           <Group title="StreamDiffusion">
             <div className="flex flex-col gap-2">
               <span className="text-sm">Recetas</span>
               <div className="flex flex-wrap gap-2" role="group" aria-label="Recetas de StreamDiffusion">
                 {STREAM_RECIPES.map(recipe => (
-                  <button key={recipe.id} type="button" className="lab-chip" title={recipe.hint} onClick={() => setStream(recipe.apply(stream))}>
+                  <button key={recipe.id} type="button" className="lab-chip" title={recipe.hint} onClick={() => onStream(recipe.apply(stream))}>
                     {recipe.label}
                   </button>
                 ))}
               </div>
               <p className="text-neutral-10 text-xs">
-                Punto de partida medido; luego ajusta a mano. «Transformar» con palabra, «Fiel al trazo» sin ella o con una
-                categoría, «Escena» con prompt libre, «Negro TD» para el look de TouchDesigner (cambia la entrada a blanco
-                sobre negro), «Scribble TD» para que siga el trazo sin palabra, «Por defecto TD» para comparar con
-                StreamDiffusionTD.
+                Punto de partida: «Scribble TD», trazo blanco sobre negro usado como mapa de líneas. Cambiar el preprocesador recarga el pipeline (~30 s).
               </p>
             </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="text-sm">Entrada al modelo</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Entrada al modelo">
+                {INPUT_LOOKS.map(look => (
+                  <button key={look.id} type="button" className="lab-chip" aria-pressed={stream.inputLook === look.id} title={look.hint} onClick={() => onStream({ inputLook: look.id })}>
+                    {look.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-neutral-10 text-xs">Tu papel no cambia: solo lo que recibe el modelo (miniatura en la esquina del lienzo).</p>
+            </div>
+
             <label className="flex flex-col gap-2">
-              <span className="text-sm">Prompt</span>
+              <span className="text-sm">Prompt libre</span>
               <textarea
                 value={stream.prompt}
-                onChange={event => setStream({ prompt: event.target.value })}
-                rows={3}
-                placeholder="Vacío: estilo + palabra. Escribe aquí para mandar tu prompt tal cual."
+                onChange={event => onStream({ prompt: event.target.value })}
+                rows={2}
+                placeholder="Vacío: pista + estilo. Escribe aquí para mandar tu prompt tal cual."
                 className="border-neutralA-5 focus:border-accent-8 placeholder:text-neutral-9 rounded-xl border bg-transparent px-3 py-2 text-sm outline-none"
               />
-              <span className="text-neutral-10 text-xs">
-                Como en StreamDiffusionTD. Para escenas, apaga «Proteger la silueta»: añade «plain background».
-              </span>
             </label>
-            <Control label="num_inference_steps" value={String(stream.steps)} hint="La rejilla a la que apuntan los t_index.">
-              <Slider
-                value={stream.steps}
-                min={10}
-                max={100}
-                step={1}
-                onValueChange={value =>
-                  setStream({ steps: Number(value), tIndex: stream.tIndex.map(index => Math.min(index, Number(value) - 1)) })
-                }
-              />
-            </Control>
+
             <Control
-              label="t_index_list"
-              value={`[${stream.tIndex.join(', ')}]`}
-              hint="Una pasada de UNet por entrada (1-4). Más entradas: más detalle, menos fps y la salida va entradas − 1 frames por detrás."
+              label="AI Strength → t_index"
+              value={`[${derived.tIndex.join(', ')}]`}
+              hint={`El slider de arriba pone la primera pasada donde sobrevive el ${Math.round(derived.kept * 100)} % del dibujo (0 = ruido puro). Aquí solo se elige cuántas pasadas y su separación.`}
             >
-              <Slider value={stream.tIndex.length} min={1} max={4} step={1} onValueChange={value => setPasses(Number(value))} />
+              <div className="grid grid-cols-2 gap-3">
+                <Control label="Pasadas" value={String(stream.passes)}>
+                  <Slider value={stream.passes} min={1} max={4} step={1} onValueChange={value => onStream({ passes: Number(value) })} />
+                </Control>
+                <Control label="Separación" value={String(stream.spread)}>
+                  <Slider value={stream.spread} min={2} max={16} step={1} onValueChange={value => onStream({ spread: Number(value) })} />
+                </Control>
+              </div>
             </Control>
-            {stream.tIndex.map((index, position) => (
-              <Control
-                key={position}
-                label={`t_index ${position + 1}`}
-                value={`${index} · ${kept(index)} %`}
-                hint={
-                  position === 0
-                    ? 'Aquí entra el ruido. 0 = ruido puro. Bajo: reinventa. Alto: se parece a la entrada. El % es cuánto del dibujo sobrevive.'
-                    : undefined
-                }
-              >
-                <Slider value={index} min={0} max={stream.steps - 1} step={1} onValueChange={value => setIndex(position, Number(value))} />
-              </Control>
-            ))}
-            <Control
-              label="Guidance"
-              value={format(stream.guidance, 1)}
-              hint="Con 1 no hay CFG: delta y el prompt negativo no hacen nada. Por encima de 1 activa RCFG (self): más caro."
-            >
-              <Slider value={stream.guidance} min={0} max={3} step={0.1} onValueChange={value => setStream({ guidance: Number(value) })} />
-              {isTurbo(model) && stream.guidance > 1 ? (
-                <p className="text-error-11 text-xs">
-                  {model.label} está destilado sin CFG: por encima de 1 la salida se llena de ruido (medido el 24 sep).
-                </p>
-              ) : null}
+
+            <Control label="num_inference_steps" value={String(stream.steps)} hint={`La rejilla. El índice más alto conserva el ${Math.round(inputKept(stream.steps - 1, stream.steps) * 100)} % del dibujo.`}>
+              <Slider value={stream.steps} min={10} max={100} step={1} onValueChange={value => onStream({ steps: Number(value) })} />
             </Control>
-            <Control label="Delta" value={format(stream.delta, 2)} hint="Peso del ruido residual de StreamDiffusion. Solo cuenta con guidance por encima de 1.">
-              <Slider value={stream.delta} min={0} max={1} step={0.05} onValueChange={value => setStream({ delta: Number(value) })} />
+
+            <Control label="Guidance" value={format(stream.guidance, 1)} hint="SDXL-Turbo está destilado sin CFG: por encima de 1 la salida se llena de ruido.">
+              <Slider value={stream.guidance} min={0} max={3} step={0.1} onValueChange={value => onStream({ guidance: Number(value) })} />
             </Control>
-            <Control
-              label="Textura de fondo"
-              value={format(stream.texture, 2)}
-              hint="Ruido de color suave bajo el trazo, el truco de TouchDesigner. Medido: 0 = objeto sobre fondo liso, 0,5 = escena alrededor del dibujo, 1 = la escena manda y el trazo pierde peso."
-            >
-              <Slider value={stream.texture} min={0} max={1} step={0.05} onValueChange={value => setStream({ texture: Number(value) })} />
+            <Control label="Delta" value={format(stream.delta, 2)} hint="Peso del ruido residual. Solo cuenta con guidance por encima de 1.">
+              <Slider value={stream.delta} min={0} max={1} step={0.05} onValueChange={value => onStream({ delta: Number(value) })} />
+            </Control>
+            <Control label="Textura de fondo" value={format(stream.texture, 2)} hint="Ruido de color bajo el trazo: 0 objeto sobre fondo liso, 0,5 escena alrededor, 1 la escena manda.">
+              <Slider value={stream.texture} min={0} max={1} step={0.05} onValueChange={value => onStream({ texture: Number(value) })} />
+            </Control>
+            <Control label="Semilla" value={String(settings.seed)} hint="Fija: sin parpadeo entre frames.">
+              <Slider value={settings.seed} min={1} max={999} step={1} onValueChange={value => onChange({ seed: Number(value) })} />
             </Control>
             <Toggle
-              label="Filtro NSFW"
-              hint="Detector de Freepik: muy agresivo, y cada frame marcado sale en negro puro. Apagado para probar; hará falta para el público."
-              checked={stream.safetyChecker}
-              onChange={safetyChecker => setStream({ safetyChecker })}
+              label="Fondo del estilo"
+              hint="Añade «centered, <fondo> background» al prompt."
+              checked={settings.backdrop}
+              onChange={backdrop => onChange({ backdrop })}
             />
-            <p className="text-neutral-10 text-xs">
-              La palabra manda mucho: con «cat» una casa dibujada sale gato. El texto lo lee CLIP, que entiende palabras sueltas en
-              español («gato») pero no frases: mejor una o dos palabras, en inglés si puedes.
-            </p>
+            <Toggle
+              label="Filtro NSFW"
+              hint="Detector de Daydream, muy agresivo: cada frame marcado sale en negro puro. Apagado para probar; hará falta para el público."
+              checked={stream.safetyChecker}
+              onChange={safetyChecker => onStream({ safetyChecker })}
+            />
           </Group>
 
           <Group title="ControlNet">
-            <p className="text-neutral-10 -mt-2 text-xs">Todos apagados de salida. Encender, apagar y cambiar el peso va en caliente.</p>
-            {(model.controlnets ?? []).map(kind => {
-              const setting = stream.controlnets[kind];
-              const copy = CONTROLNET_COPY[kind];
-
-              return (
-                <div key={kind} className="flex flex-col gap-3">
-                  <Toggle label={copy.label} hint={copy.hint} checked={setting.enabled} onChange={enabled => setControlNet(kind, { enabled })} />
-                  {setting.enabled ? (
-                    <Control label="Peso" value={format(setting.scale, 2)}>
-                      <Slider value={setting.scale} min={0.05} max={1} step={0.05} onValueChange={value => setControlNet(kind, { scale: Number(value) })} />
-                    </Control>
-                  ) : null}
-                  {kind === 'canny' && setting.enabled ? (
-                    <>
-                      <div className="flex flex-col gap-2">
-                        <span className="text-sm">Preprocesador</span>
-                        <div className="flex flex-wrap gap-2" role="group" aria-label="Preprocesador de líneas">
-                          {LINE_PREPROCESSORS.map(option => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              className="lab-chip"
-                              aria-pressed={stream.linePreprocessor === option.id}
-                              onClick={() => setStream({ linePreprocessor: option.id })}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                        <p className="text-neutral-10 text-xs">Cambiarlo recarga el pipeline (~30 s).</p>
-                      </div>
-                      {stream.linePreprocessor === 'canny' ? (
-                        <>
-                          <Control label="Umbral bajo" value={String(stream.cannyLow)} hint="Cambiar los umbrales recarga el pipeline (~30 s).">
-                            <Slider value={stream.cannyLow} min={0} max={255} step={5} onValueChange={value => setStream({ cannyLow: Number(value) })} />
-                          </Control>
-                          <Control label="Umbral alto" value={String(stream.cannyHigh)}>
-                            <Slider value={stream.cannyHigh} min={0} max={255} step={5} onValueChange={value => setStream({ cannyHigh: Number(value) })} />
-                          </Control>
-                        </>
-                      ) : null}
-                    </>
-                  ) : null}
+            <Toggle label={CONTROLNET_COPY.canny.label} hint={CONTROLNET_COPY.canny.hint} checked={stream.controlnets.canny.enabled} onChange={enabled => setControlNet('canny', { enabled })} />
+            {stream.controlnets.canny.enabled ? (
+              <>
+                <Control
+                  label="Peso base"
+                  value={`${format(stream.controlnets.canny.scale, 2)} → ${format(derived.lineScale, 2)}`}
+                  hint="AI Strength lo afloja: a 0 manda el trazo entero, a 100 queda el 40 % del peso base."
+                >
+                  <Slider value={stream.controlnets.canny.scale} min={0.05} max={1} step={0.05} onValueChange={value => setControlNet('canny', { scale: Number(value) })} />
+                </Control>
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm">Preprocesador</span>
+                  <div className="flex flex-wrap gap-2" role="group" aria-label="Preprocesador de líneas">
+                    {LINE_PREPROCESSORS.map(option => (
+                      <button key={option.id} type="button" className="lab-chip" aria-pressed={stream.linePreprocessor === option.id} onClick={() => onStream({ linePreprocessor: option.id })}>
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              );
-            })}
+                {stream.linePreprocessor === 'canny' ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Control label="Umbral bajo" value={String(stream.cannyLow)}>
+                      <Slider value={stream.cannyLow} min={0} max={255} step={5} onValueChange={value => onStream({ cannyLow: Number(value) })} />
+                    </Control>
+                    <Control label="Umbral alto" value={String(stream.cannyHigh)}>
+                      <Slider value={stream.cannyHigh} min={0} max={255} step={5} onValueChange={value => onStream({ cannyHigh: Number(value) })} />
+                    </Control>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            {(['depth', 'tile'] as const).map(kind => (
+              <div key={kind} className="flex flex-col gap-3">
+                <Toggle label={CONTROLNET_COPY[kind].label} hint={CONTROLNET_COPY[kind].hint} checked={stream.controlnets[kind].enabled} onChange={enabled => setControlNet(kind, { enabled })} />
+                {stream.controlnets[kind].enabled ? (
+                  <Control label="Peso" value={format(stream.controlnets[kind].scale, 2)}>
+                    <Slider value={stream.controlnets[kind].scale} min={0.05} max={1} step={0.05} onValueChange={value => setControlNet(kind, { scale: Number(value) })} />
+                  </Control>
+                ) : null}
+              </div>
+            ))}
           </Group>
         </>
-      ) : (
-        <Group title="Bucle">
-          <Control label="Espera mínima entre frames" value={`${settings.throttleMs} ms`} hint="Solo un frame en vuelo: esto es un tope inferior, no una cadencia.">
-            <Slider value={settings.throttleMs} min={0} max={1000} step={16} onValueChange={value => onChange({ throttleMs: Number(value) })} />
-          </Control>
-        </Group>
       )}
+
+      <Group title="Test estándar">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Boceto de prueba">
+          {TEST_SKETCHES.map(sketch => (
+            <button key={sketch.id} type="button" className="lab-chip" aria-pressed={sketch.id === testSketchId} onClick={() => onTestSketch(sketch.id)}>
+              {sketch.word}
+            </button>
+          ))}
+        </div>
+        <p className="text-neutral-10 text-xs">
+          <kbd className="font-mono">T</kbd> borra el lienzo y dibuja este boceto trazo a trazo con el bucle encendido, como lo haría una persona. Los
+          mismos bocetos que usan las medidas de scripts/lab.
+        </p>
+      </Group>
+
+      <details className="text-neutral-10 text-xs" open>
+        <summary className="lab-focus cursor-pointer select-none">Prompt enviado</summary>
+        <p className="mt-2 font-mono leading-relaxed">{prompt}</p>
+      </details>
     </div>
   );
 };

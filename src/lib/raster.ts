@@ -7,7 +7,7 @@ const loadImage = (source: string) =>
     image.src = source;
   });
 
-const drawSquare = (image: HTMLImageElement, width: number, height: number, size: number, quality: number) => {
+const drawSquare = (image: HTMLImageElement, width: number, height: number, size: number, quality: number, blurPx = 0) => {
   const canvas = document.createElement('canvas');
 
   canvas.width = size;
@@ -23,6 +23,9 @@ const drawSquare = (image: HTMLImageElement, width: number, height: number, size
   const scale = size / Math.max(width, height);
   const targetWidth = width * scale;
   const targetHeight = height * scale;
+
+  // AI Strength on klein: a softer sketch is a looser reference (see `aiStrengthFor`).
+  if (blurPx > 0) context.filter = `blur(${blurPx}px)`;
 
   context.drawImage(image, (size - targetWidth) / 2, (size - targetHeight) / 2, targetWidth, targetHeight);
 
@@ -72,7 +75,7 @@ const countInk = (image: HTMLImageElement, width: number, height: number) => {
 /** Below this many ink cells the frame counts as blank and is not sent. */
 export const MIN_INK_CELLS = 6;
 
-export const rasterizeSvg = async (svg: SVGSVGElement, size: number, quality = 0.5) => {
+export const rasterizeSvg = async (svg: SVGSVGElement, size: number, quality = 0.5, blurPx = 0) => {
   const { width, height } = svg.getBoundingClientRect();
 
   if (!width || !height) return null;
@@ -93,7 +96,7 @@ export const rasterizeSvg = async (svg: SVGSVGElement, size: number, quality = 0
 
   if (ink < MIN_INK_CELLS) return { dataUrl: null, ink };
 
-  return { dataUrl: drawSquare(image, width, height, size, quality), ink };
+  return { dataUrl: drawSquare(image, width, height, size, quality, blurPx), ink };
 };
 
 /** Re-encodes the provider's PNG export (used for the reveal, where quality wins). */

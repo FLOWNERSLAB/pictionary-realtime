@@ -2,27 +2,28 @@ import type { DrawingStroke } from '@digo-labs/ui';
 import { Button, Kbd, Tabs, TabsList, TabsTab, ToggleTheme, useDrawing } from '@digo-labs/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { FINISH_MODELS, INPUT_LOOKS, LIVE_MODELS, STREAM_DEFAULTS, TRANSPORT_LABEL, buildPrompt, clampSteps, findModel, isMeasurable } from '../data/models';
-import { DEFAULT_PRESET_ID, STYLE_PRESETS } from '../data/presets';
+import type { Settings } from '../data/model';
+import { DEFAULT_SETTINGS, MODEL } from '../data/model';
+import type { StreamSettings } from '../data/stream';
+import { STREAM_DEFAULTS, STREAM_MODEL, buildStreamParams, describeStreamStrength } from '../data/stream';
+import { DEFAULT_STYLE_ID, STYLES, findStyle } from '../data/styles';
 import { useDaydreamStream } from '../hooks/use-daydream-stream';
 import { useLiveRender } from '../hooks/use-live-render';
-import type { BenchRun } from '../lib/bench-log';
-import { clearRuns, deleteRun, loadRuns, makeThumbnail, runFromMetrics, saveRun } from '../lib/bench-log';
-import { errorMessage, fal, imageUrlFromResult } from '../lib/fal';
+import { hasFalKey } from '../lib/fal';
 import { estimateCost, format, summarize } from '../lib/metrics';
-import { toSquareJpeg } from '../lib/raster';
-import { placeTestSketch, replayTestSketch, sleep } from '../lib/test-sketch';
+import { AI_STRENGTH_DEFAULT, buildPrompt, inputBlurFor, rungFor } from '../lib/prompt';
+import { STREAM_NEGATIVE, buildStreamPrompt } from '../lib/stream-prompt';
+import { TEST_SKETCHES, findSketch, replayTestSketch, sleep } from '../lib/test-sketch';
 import { CanvasPanel } from './canvas-panel';
+import { HistoryStrip } from './history-strip';
 import { LatencyTape } from './latency-tape';
-import { ModelPicker } from './model-picker';
 import { OutputPanel } from './output-panel';
-import { ResultsPanel } from './results-panel';
-import type { LiveSettings } from './settings-panel';
+import type { Engine } from './settings-panel';
 import { SettingsPanel } from './settings-panel';
+import { StrengthControl } from './strength-control';
+import { StylePicker } from './style-picker';
 
 type Layout = 'split' | 'overlay';
-type Lightbox = 'live' | 'reveal';
-type TestState = { label: string; modelId: string } | null;
 
 const PHASE_COPY = {
   off: 'Parado',
@@ -32,28 +33,31 @@ const PHASE_COPY = {
   error: 'Error',
 } as const;
 
+const ENGINE_LABEL: Record<Engine, string> = { klein: 'Flux realtime', stream: 'StreamDiffusion' };
+
 const INK = '#0a0a0a';
 const INK_SIZE = 10;
-
-/** Waits until `check` passes, the timeout runs out, or the run is aborted. */
-const until = async (check: () => boolean, timeoutMs: number, signal: AbortSignal) => {
-  const startedAt = performance.now();
-
-  while (!check()) {
-    if (performance.now() - startedAt > timeoutMs) return false;
-
-    await sleep(100, signal);
-  }
-
-  return true;
-};
+/** Typing in the hint field changes the prompt; one frame per keystroke would be waste. */
+const HINT_DEBOUNCE_MS = 350;
 
 const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
+const useDebounced = <T,>(value: T, ms: number) => {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), ms);
+
+    return () => window.clearTimeout(timer);
+  }, [value, ms]);
+
+  return debounced;
+};
+
 export const Studio = () => {
   const drawing = useDrawing();
-  const { strokes, exportImage, isEmpty } = drawing;
+  const { strokes, isEmpty } = drawing;
   /**
    * The provider's actions close over its current strokes, so a copy held across
    * awaits writes stale state back (the test sketch vanished that way). The test
@@ -65,51 +69,44 @@ export const Studio = () => {
     drawingRef.current = drawing;
   });
 
-  const [modelId, setModelId] = useState(LIVE_MODELS[0].id);
-  const [finishId, setFinishId] = useState(FINISH_MODELS[0].id);
-  const [presetId, setPresetId] = useState<string>(DEFAULT_PRESET_ID);
-  const [subject, setSubject] = useState('');
+  const [engine, setEngine] = useState<Engine>('klein');
+  const [styleId, setStyleId] = useState<string>(DEFAULT_STYLE_ID);
+  const [hintInput, setHintInput] = useState('');
+  const [strength, setStrength] = useState(AI_STRENGTH_DEFAULT);
   const [running, setRunning] = useState(false);
   const [layout, setLayout] = useState<Layout>('split');
-  const [lightbox, setLightbox] = useState<Lightbox>('live');
-  const [panel, setPanel] = useState('settings');
-  const [settings, setSettings] = useState<LiveSettings>({
-    steps: LIVE_MODELS[0].steps.default,
-    strength: 0.7,
-    memory: 0,
-    throttleMs: 0,
-    seed: 35,
-    scheduleMu: 2.3,
-    interpolate: false,
-    hd: false,
-    guardSilhouette: true,
-    stream: STREAM_DEFAULTS,
-  });
-
-  const [revealImage, setRevealImage] = useState<string | null>(null);
-  const [revealMs, setRevealMs] = useState(0);
-  const [revealLoading, setRevealLoading] = useState(false);
-  const [revealError, setRevealError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [streamSettings, setStreamSettings] = useState<StreamSettings>(STREAM_DEFAULTS);
+  const [testSketchId, setTestSketchId] = useState(TEST_SKETCHES[0].id);
+  const [pinned, setPinned] = useState<number | null>(null);
   const [hasKey, setHasKey] = useState(true);
-  const [runs, setRuns] = useState<BenchRun[]>(() => loadRuns());
-  const [test, setTest] = useState<TestState>(null);
+  const [hasDaydreamKey, setHasDaydreamKey] = useState(true);
+  const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const dirtyRef = useRef(0);
   const testAbort = useRef<AbortController | null>(null);
 
-  const model = findModel(modelId, LIVE_MODELS);
-  const finishModel = findModel(finishId, FINISH_MODELS);
-  const preset = STYLE_PRESETS.find(candidate => candidate.id === presetId) ?? STYLE_PRESETS[0];
-  const prompt = buildPrompt(preset, subject, model, settings.guardSilhouette);
-  const finishPrompt = buildPrompt(preset, subject, finishModel, settings.guardSilhouette);
+  const hint = useDebounced(hintInput, HINT_DEBOUNCE_MS);
+  const style = findStyle(styleId);
+  const rung = rungFor(strength);
+  const isStream = engine === 'stream';
+
+  // ── Flux realtime lane (untouched by the stream lane)
+  const prompt = useMemo(() => buildPrompt({ style, hint, strength, backdrop: settings.backdrop }), [style, hint, strength, settings.backdrop]);
+  const inputBlur = inputBlurFor(strength);
+  const meta = useMemo(
+    () => ({ styleId: style.id, styleLabel: style.label, strength, rungLabel: rung.label, hint }),
+    [style.id, style.label, strength, rung.label, hint],
+  );
 
   useEffect(() => {
-    fetch('/api/fal/status')
+    void hasFalKey().then(setHasKey);
+    fetch('/api/daydream/status')
       .then(response => response.json())
-      .then(({ hasKey: present }) => setHasKey(Boolean(present)))
-      .catch(() => setHasKey(false));
+      .then(({ hasKey: present }) => setHasDaydreamKey(Boolean(present)))
+      .catch(() => setHasDaydreamKey(false));
   }, []);
 
   // Undo, clear and replayed strokes never fire a pointer move: mark them dirty too.
@@ -117,10 +114,10 @@ export const Studio = () => {
     dirtyRef.current += 1;
   }, [strokes]);
 
-  // A new style or parameter reaches the model without waiting for the next stroke.
+  // A new style, strength or parameter reaches the model without waiting for the next stroke.
   useEffect(() => {
     dirtyRef.current += 1;
-  }, [prompt, preset.negative, settings]);
+  }, [prompt, settings, inputBlur]);
 
   const markDirty = useCallback(() => {
     dirtyRef.current += 1;
@@ -128,265 +125,148 @@ export const Studio = () => {
 
   const getSvg = useCallback(() => wrapperRef.current?.querySelector('svg') ?? null, []);
 
-  const isDaydream = model.provider === 'daydream';
   const hasDrawing = strokes.some(stroke => stroke.tool === 'pen');
 
-  const live = useLiveRender({
-    model,
-    enabled: running && !isDaydream,
-    throttleMs: settings.throttleMs,
-    prompt,
-    negative: preset.negative,
-    steps: settings.steps,
-    strength: settings.strength,
-    feedback: 1 - settings.memory,
-    seed: settings.seed,
-    scheduleMu: settings.scheduleMu,
-    interpolate: settings.interpolate,
-    hd: settings.hd,
-    getSvg,
-    dirtyRef,
-    // Eraser strokes alone are not a drawing.
-    hasDrawing,
-  });
+  const live = useLiveRender({ enabled: running && !isStream, prompt, settings, inputBlur, meta, hasDrawing, getSvg, dirtyRef });
 
+  // ── StreamDiffusion lane
+  const streamPrompt = useMemo(() => buildStreamPrompt({ style, hint, backdrop: settings.backdrop }), [style, hint, settings.backdrop]);
   const streamParams = useMemo(
-    () =>
-      model.buildInput({
-        prompt,
-        negative: preset.negative,
-        imageDataUrl: '',
-        steps: settings.steps,
-        strength: settings.strength,
-        feedback: 1,
-        seed: settings.seed,
-        stream: settings.stream,
-      }),
-    [model, prompt, preset.negative, settings.steps, settings.strength, settings.seed, settings.stream],
+    () => buildStreamParams({ prompt: streamPrompt, negative: STREAM_NEGATIVE, seed: settings.seed, strength, stream: streamSettings }),
+    [streamPrompt, settings.seed, strength, streamSettings],
   );
-
   const stream = useDaydreamStream({
-    model,
-    enabled: running && isDaydream,
+    enabled: running && isStream,
     params: streamParams,
     hasDrawing,
-    texture: settings.stream.texture,
-    look: settings.stream.inputLook,
+    texture: streamSettings.texture,
+    look: streamSettings.inputLook,
     getSvg,
     dirtyRef,
   });
-
   const { probe } = stream;
 
-  // A streamed model has no per-frame answers: its still is only for thumbnails.
-  const source = isDaydream
+  // What the panels read, whichever engine is on.
+  const source = isStream
     ? {
-        output: stream.still,
         metrics: stream.metrics,
         error: stream.error,
+        phase: stream.phase,
+        waitingMs: stream.waitingMs,
+        clearMetrics: stream.clearMetrics,
         blankWarning: stream.buffering
           ? 'La salida se ha cortado: Daydream está recargando el pipeline o reconectando. Vuelve sola.'
           : stream.blackout
             ? 'La salida lleva 3 s en negro puro. Si es tras cambiar el preprocesador, espera ~30 s; si no vuelve, para y empieza el bucle de nuevo.'
             : null,
-        clearMetrics: stream.clearMetrics,
-        waitingMs: stream.waitingMs,
-        phase: stream.phase,
       }
-    : live;
-  const { output, metrics, error, blankWarning, clearMetrics, waitingMs, phase } = source;
-  const stats = useMemo(() => summarize(metrics, !isDaydream), [metrics, isDaydream]);
-  const cost = estimateCost(model.billing, metrics);
+    : { metrics: live.metrics, error: live.error, phase: live.phase, waitingMs: live.waitingMs, clearMetrics: live.clearMetrics, blankWarning: live.blankWarning };
+  const { metrics, error, phase, waitingMs, clearMetrics, blankWarning } = source;
+  const { frames, output } = live;
+  const stats = useMemo(() => summarize(metrics, !isStream), [metrics, isStream]);
+  const cost = estimateCost(metrics);
 
   // The async test runner reads these after awaits, so it needs the latest values.
-  const snapshot = useRef({ metrics, output, model, preset, settings, phase, probe });
-  // Consecutive saves in "Probar todos" land before React re-renders.
-  const runsRef = useRef(runs);
+  const snapshot = useRef({ metrics, strength, phase, probe, isStream });
 
   useEffect(() => {
-    snapshot.current = { metrics, output, model, preset, settings, phase, probe };
-    runsRef.current = runs;
+    snapshot.current = { metrics, strength, phase, probe, isStream };
   });
 
-  const selectModel = useCallback((id: string) => {
-    const next = findModel(id, LIVE_MODELS);
-
-    if (next.unavailable) return;
-
-    setModelId(next.id);
-    // Each model starts on its own sensible step count, so runs compare like for like.
-    setSettings(current => ({ ...current, steps: clampSteps(next, next.steps.default) }));
-    setLightbox('live');
+  const bumpStrength = useCallback((delta: number) => {
+    setStrength(current => Math.round(Math.min(1, Math.max(0, current + delta)) * 100) / 100);
   }, []);
 
-  const saveCurrent = useCallback(
-    async (standard: boolean, firstFrameMs?: number | null) => {
-      const { metrics: current, output: frame, model: measured, preset: style, settings: used } = snapshot.current;
-
-      if (!current.received) return;
-
-      const next = saveRun(runsRef.current, {
-        modelId: measured.id,
-        modelLabel: measured.label,
-        transport: TRANSPORT_LABEL[measured.transport],
-        preset: style.label,
-        steps: used.steps,
-        inputSize: measured.inputSize,
-        standard,
-        ...runFromMetrics(current),
-        firstFrameMs: firstFrameMs ?? current.firstFrameMs,
-        cost: estimateCost(measured.billing, current),
-        thumbnail: await makeThumbnail(frame),
-      });
-
-      runsRef.current = next;
-      setRuns(next);
-    },
-    [],
-  );
+  /** Switching engines stops the loop: the two never run at once. */
+  const selectEngine = useCallback((next: Engine) => {
+    setEngine(next);
+    setRunning(false);
+    setPinned(null);
+    setNotice(null);
+  }, []);
 
   /**
-   * The standard test, one model: wake the endpoint with the whole sketch (that
-   * wait is the cold start), then clear, redraw it at pointer speed and measure
-   * only that stretch. Same drawing, same style, same seed for every model.
+   * The standard test: clear, switch the loop on, draw the chosen sketch stroke by
+   * stroke at pointer speed, and report what the tape measured. Same drawing, same
+   * style, same seed every time, so runs compare.
    */
-  const runStandardTest = useCallback(
-    async (signal: AbortSignal) => {
-      const size = drawingRef.current.viewportSize;
+  const runTest = useCallback(async () => {
+    testAbort.current?.abort();
 
-      if (!size) throw new Error('El lienzo todavía no tiene tamaño.');
+    const controller = new AbortController();
+    const { signal } = controller;
+    const size = drawingRef.current.viewportSize;
 
-      const paint = {
+    testAbort.current = controller;
+    setNotice(null);
+
+    if (!size) {
+      setNotice('El lienzo todavía no tiene tamaño.');
+
+      return;
+    }
+
+    setTesting(true);
+
+    try {
+      drawingRef.current.clear();
+      setRunning(true);
+      setPinned(null);
+      clearMetrics();
+      await sleep(300, signal);
+
+      const sketch = findSketch(testSketchId);
+
+      await replayTestSketch({
+        sketch,
         width: size.width,
         height: size.height,
         color: INK,
         size: INK_SIZE,
         addStroke: (stroke: DrawingStroke) => drawingRef.current.addStroke(stroke),
-        updateStroke: (id: string, points: number[][]) => drawingRef.current.updateStroke(id, points),
+        updateStroke: (id, points) => drawingRef.current.updateStroke(id, points),
         signal,
         onInk: markDirty,
-      };
+      });
 
-      drawingRef.current.clear();
-      setRunning(true);
-      setLightbox('live');
-      await sleep(150, signal);
+      const startedAt = performance.now();
 
-      const wokeAt = performance.now();
-
-      await placeTestSketch(paint);
-      markDirty();
-
-      const streamed = snapshot.current.model.provider === 'daydream';
-      const woke = await until(
-        () => (streamed ? snapshot.current.phase === 'live' : snapshot.current.metrics.received > 0),
-        180000,
-        signal,
-      );
-
-      if (!woke) throw new Error(`${snapshot.current.model.label} no contestó en 3 minutos.`);
-
-      const coldMs = performance.now() - wokeAt;
-
-      drawingRef.current.clear();
-      await sleep(400, signal);
-      clearMetrics();
-
-      await replayTestSketch(paint);
-
-      if (streamed) {
+      if (snapshot.current.isStream) {
         // A stream has no frame to wait for: latency comes from the blackout probe.
+        while (snapshot.current.phase !== 'live' && performance.now() - startedAt < 180000) await sleep(200, signal);
         await sleep(1000, signal);
         await snapshot.current.probe();
       } else {
-        // Let the last frame land before closing the measurement.
-        await until(() => snapshot.current.metrics.sent === snapshot.current.metrics.received, 15000, signal);
+        // Let the last frame land before reading the tape.
+        while (snapshot.current.metrics.sent !== snapshot.current.metrics.received && performance.now() - startedAt < 15000) await sleep(100, signal);
       }
 
-      await sleep(300, signal);
-      await saveCurrent(true, coldMs);
-    },
-    [clearMetrics, markDirty, saveCurrent],
-  );
+      const { metrics: measured, isStream: streamed } = snapshot.current;
+      const summary = summarize(measured, !streamed);
 
-  const startTest = useCallback(
-    async (all: boolean) => {
-      testAbort.current?.abort();
-
-      const controller = new AbortController();
-      const queue = all ? LIVE_MODELS.filter(isMeasurable) : [model];
-
-      testAbort.current = controller;
-      setNotice(null);
-      setPanel('results');
-
-      for (const [index, candidate] of queue.entries()) {
-        if (controller.signal.aborted) break;
-
-        setTest({ label: all ? `${index + 1}/${queue.length} · ${candidate.label}` : candidate.label, modelId: candidate.id });
-
-        if (candidate.id !== snapshot.current.model.id) {
-          selectModel(candidate.id);
-          await sleep(600, controller.signal).catch(() => undefined);
-        }
-
-        try {
-          await runStandardTest(controller.signal);
-        } catch (fault) {
-          if ((fault as Error).name === 'AbortError') break;
-
-          setNotice(`${candidate.label}: ${errorMessage(fault)}`);
-        }
-      }
-
-      setTest(null);
+      setNotice(
+        streamed
+          ? `Test «${sketch.word}» en StreamDiffusion: ${format(summary.fps, 1)} fps · latencia de extremo a extremo p50 ${format(summary.p50)} ms (${measured.received} sondeos) · 1er frame ${
+              measured.firstFrameMs === null ? '-' : `${format(measured.firstFrameMs / 1000, 1)} s`
+            }`
+          : `Test «${sketch.word}»: ${measured.received} frames mientras se dibujaba · p50 ${format(summary.p50)} ms · p90 ${format(summary.p90)} ms · 1er frame ${
+              measured.firstFrameMs === null ? '-' : `${format(measured.firstFrameMs / 1000, 1)} s`
+            }`,
+      );
+    } catch (fault) {
+      if ((fault as Error).name !== 'AbortError') setNotice((fault as Error).message);
+    } finally {
+      setTesting(false);
       testAbort.current = null;
-    },
-    [model, runStandardTest, selectModel],
-  );
+    }
+  }, [clearMetrics, markDirty, testSketchId]);
 
   const stopTest = useCallback(() => {
     testAbort.current?.abort();
-    setTest(null);
+    setTesting(false);
   }, []);
 
-  const reveal = useCallback(async () => {
-    setRevealLoading(true);
-    setRevealError(null);
-    setLightbox('reveal');
-
-    try {
-      const exported = await exportImage({ width: finishModel.inputSize, background: '#ffffff', padding: 48 });
-
-      if (!exported) throw new Error('El lienzo está vacío: dibuja algo antes de revelar.');
-
-      const imageDataUrl = await toSquareJpeg(exported.dataUrl, finishModel.inputSize);
-
-      if (!imageDataUrl) throw new Error('No se pudo rasterizar el dibujo.');
-
-      const startedAt = performance.now();
-      const { data } = await fal.subscribe(finishModel.endpoint, {
-        input: finishModel.buildInput({
-          prompt: finishPrompt,
-          negative: preset.negative,
-          imageDataUrl,
-          steps: finishModel.steps.max,
-          strength: 0.8,
-          feedback: 1,
-          seed: settings.seed,
-        }),
-      });
-
-      setRevealMs(performance.now() - startedAt);
-      setRevealImage(imageUrlFromResult(data));
-    } catch (fault) {
-      setRevealError(errorMessage(fault));
-    } finally {
-      setRevealLoading(false);
-    }
-  }, [exportImage, finishModel, finishPrompt, preset.negative, settings.seed]);
-
-  // Keyboard: the lab is driven with one hand on the pen and one on the keys.
+  // Keyboard: one hand on the pen, one on the keys.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (isTyping(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -396,82 +276,97 @@ export const Studio = () => {
       if (key === ' ') {
         event.preventDefault();
         setRunning(current => !current);
-      } else if (key === 't') void startTest(false);
-      else if (key === 'r' && !isEmpty) void reveal();
+      } else if (key === 't') void runTest();
       else if (key === 'o') setLayout(current => (current === 'split' ? 'overlay' : 'split'));
-      else if (key === 'g') void saveCurrent(false);
-      else if (key === 'l' && isDaydream) void probe();
-      else if (key === 'escape') stopTest();
-      else if (/^[1-9]$/.test(key)) setPresetId(STYLE_PRESETS[Number(key) - 1]?.id ?? presetId);
+      else if (key === 'l' && isStream) void probe();
+      else if (key === 'escape') {
+        stopTest();
+        setPinned(null);
+      } else if (key === '[' || key === ']') bumpStrength(key === ']' ? 0.05 : -0.05);
+      else if (/^[1-9]$/.test(key)) {
+        const style = STYLES[Number(key) - 1];
+
+        if (style) setStyleId(style.id);
+      }
     };
 
     window.addEventListener('keydown', onKey);
 
     return () => window.removeEventListener('keydown', onKey);
-  }, [isDaydream, isEmpty, presetId, reveal, saveCurrent, probe, startTest, stopTest]);
+  }, [bumpStrength, isStream, probe, runTest, stopTest]);
 
-  // A stream's still exists only for result thumbnails: on screen it is the live video or nothing.
-  const liveImage = lightbox === 'reveal' ? revealImage : isDaydream ? null : output;
-  const liveEmpty =
-    lightbox === 'reveal' ? (
-      <span className="max-w-xs text-sm">
-        {revealLoading ? 'Renderizando el resultado final…' : 'Pulsa «Revelar» para el render final de alta calidad.'}
-      </span>
-    ) : !running ? (
-      <span className="flex max-w-xs flex-col items-center gap-2 text-sm">
-        <span>Enciende el bucle y dibuja.</span>
-        <span className="text-neutral-10 text-xs">
-          <Kbd>Espacio</Kbd> enciende · <Kbd>T</Kbd> test estándar
-        </span>
-      </span>
-    ) : isDaydream && phase === 'error' ? (
-      <span className="max-w-xs text-sm">El stream no arrancó: el motivo está debajo del lienzo. Para y vuelve a empezar.</span>
-    ) : isDaydream && (phase === 'connecting' || phase === 'cold') ? (
-      <span className="max-w-xs text-sm">
-        {phase === 'connecting' ? 'Creando el stream en Daydream…' : `Cargando el pipeline de StreamDiffusion: ${format(waitingMs / 1000)} s.`}{' '}
-        El primer frame queda medido aparte.
-      </span>
-    ) : phase === 'cold' && waitingMs > 3000 ? (
-      <span className="max-w-xs text-sm">
-        Arrancando {model.label}: {format(waitingMs / 1000)} s. En frío fal puede tardar minutos; el primer frame queda
-        medido aparte.
-      </span>
-    ) : (
-      <span className="max-w-xs text-sm">Dibuja en el papel: cada trazo sale hacia el modelo.</span>
-    );
+  const pinnedFrame = pinned === null ? null : frames.find(frame => frame.id === pinned);
 
-  const lightboxLabel = (
+  // The pinned frame left the history: back to live.
+  if (pinned !== null && !pinnedFrame) setPinned(null);
+
+  const shown = isStream ? null : (pinnedFrame ?? output);
+
+  const empty = !running ? (
+    <span className="flex max-w-xs flex-col items-center gap-2 text-sm">
+      <span>Enciende el bucle y dibuja.</span>
+      <span className="text-neutral-10 text-xs">
+        <Kbd>Espacio</Kbd> enciende · <Kbd>T</Kbd> dibuja el boceto de prueba
+      </span>
+    </span>
+  ) : phase === 'error' ? (
+    <span className="max-w-xs text-sm">{isStream ? 'El stream no arrancó: el motivo está debajo del lienzo. Para y vuelve a empezar.' : 'fal no contesta: el motivo está debajo del lienzo.'}</span>
+  ) : isStream && (phase === 'connecting' || phase === 'cold') ? (
+    <span className="max-w-xs text-sm">
+      {phase === 'connecting' ? 'Creando el stream en Daydream…' : `Cargando el pipeline de StreamDiffusion: ${format(waitingMs / 1000)} s.`} El primer frame queda
+      medido aparte.
+    </span>
+  ) : phase === 'cold' && waitingMs > 3000 ? (
+    <span className="max-w-xs text-sm">
+      Arrancando {MODEL.label}: {format(waitingMs / 1000)} s. En frío fal puede tardar hasta minutos; el primer frame queda medido aparte.
+    </span>
+  ) : (
+    <span className="max-w-xs text-sm">Dibuja en el papel: cada trazo sale hacia el modelo.</span>
+  );
+
+  const label = (
     <span className="bg-neutral-1/80 text-neutral-12 flex items-center gap-2 rounded-full px-3 py-1 text-xs backdrop-blur">
-      <span className="lab-dot" data-phase={lightbox === 'reveal' ? 'off' : phase} />
-      {lightbox === 'reveal' ? finishModel.label : model.label}
+      <span className="lab-dot" data-phase={pinned === null ? phase : 'off'} />
+      {isStream ? (
+        <>
+          {STREAM_MODEL.label} · {style.label} · {Math.round(strength * 100)}
+          {hint ? ` · «${hint}»` : ''}
+        </>
+      ) : shown ? (
+        <>
+          {shown.styleLabel} · {shown.rungLabel} {Math.round(shown.strength * 100)}
+          {shown.hint ? ` · «${shown.hint}»` : ''}
+          {pinned !== null ? ' · fijado' : ''}
+        </>
+      ) : (
+        MODEL.label
+      )}
     </span>
   );
 
-  const lightboxFooter =
-    lightbox === 'reveal' && revealMs ? (
-      <span className="bg-neutral-1/80 rounded-full px-3 py-1 font-mono text-xs backdrop-blur">
-        {format(revealMs / 1000, 2)} s de render
-      </span>
+  const footer =
+    shown && shown.latencyMs !== null ? (
+      <span className="bg-neutral-1/80 rounded-full px-3 py-1 font-mono text-xs backdrop-blur">{format(shown.latencyMs)} ms</span>
     ) : null;
 
   const outputPanel = (
     <OutputPanel
-      image={liveImage}
+      image={shown?.url ?? null}
       // On a blank canvas StreamDiffusion invents a figure from the prompt alone: keep it hidden, like fal.
-      video={isDaydream && lightbox === 'live' && hasDrawing ? stream.video : null}
-      alt={`Render de ${lightbox === 'reveal' ? finishModel.label : model.label}`}
-      loading={lightbox === 'reveal' ? revealLoading : running && (isDaydream ? phase === 'connecting' || phase === 'cold' : metrics.sent > metrics.received)}
-      empty={liveEmpty}
-      warning={lightbox === 'live' ? blankWarning : null}
-      label={lightboxLabel}
-      footer={lightboxFooter}
-      className={`size-full ${running && phase === 'live' && lightbox === 'live' ? 'lab-live-ring' : ''}`}
+      video={isStream && hasDrawing ? stream.video : null}
+      alt={shown ? `${shown.styleLabel}, AI Strength ${Math.round(shown.strength * 100)}` : 'Render'}
+      loading={running && (isStream ? phase === 'connecting' || phase === 'cold' : pinned === null && metrics.sent > metrics.received)}
+      empty={empty}
+      warning={pinned === null ? blankWarning : null}
+      label={label}
+      footer={footer}
+      className={`size-full ${running && phase === 'live' && pinned === null ? 'lab-live-ring' : ''}`}
     />
   );
 
   // StreamDiffusion only: the frame the model gets, so the input look can be judged by eye.
   const inputPreview =
-    isDaydream && stream.input ? (
+    isStream && stream.input ? (
       <figure className="border-neutralA-6 bg-neutral-1/80 flex flex-col gap-1 rounded-lg border p-1 backdrop-blur">
         <video
           ref={element => {
@@ -487,9 +382,6 @@ export const Studio = () => {
       </figure>
     ) : null;
 
-  const setInputLook = (inputLook: (typeof INPUT_LOOKS)[number]['id']) =>
-    setSettings(current => ({ ...current, stream: { ...current.stream, inputLook } }));
-
   return (
     <div className="lab-shell text-neutral-12 flex min-h-dvh flex-col">
       <header className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 md:px-6">
@@ -498,14 +390,21 @@ export const Studio = () => {
           <span className="text-accent-11 font-mono text-xs">lab</span>
         </div>
 
-        <div className="order-3 w-full md:order-none md:w-auto md:flex-1 md:justify-center md:flex">
-          <ModelPicker models={LIVE_MODELS} value={modelId} onChange={selectModel} title="Modelo en vivo" />
-        </div>
+        <Tabs value={engine} onValueChange={value => selectEngine(value as Engine)} variant="underline">
+          <TabsList>
+            <TabsTab value="klein">{ENGINE_LABEL.klein}</TabsTab>
+            <TabsTab value="stream" disabled={!hasDaydreamKey}>
+              {ENGINE_LABEL.stream}
+            </TabsTab>
+          </TabsList>
+        </Tabs>
 
-        <div className="ml-auto flex items-center gap-3 md:ml-0">
-          <span className="text-neutral-11 hidden items-center gap-2 text-xs sm:flex" aria-live="polite">
+        <div className="ml-auto flex items-center gap-4">
+          <span className="text-neutral-11 flex items-center gap-2 text-xs" aria-live="polite">
             <span className="lab-dot" data-phase={phase} />
             {PHASE_COPY[phase]}
+            {stats.p50 ? <span className="font-mono tabular-nums">· {format(stats.p50)} ms</span> : null}
+            {isStream && stats.fps ? <span className="font-mono tabular-nums">· {format(stats.fps, 1)} fps</span> : null}
           </span>
           <ToggleTheme />
         </div>
@@ -513,12 +412,17 @@ export const Studio = () => {
 
       {hasKey ? null : (
         <p className="bg-warning-3 text-warning-11 px-6 py-2 text-sm">
-          No hay FAL_KEY: copia <code>.env.example</code> a <code>.env</code>, pon tu clave de fal y reinicia el servidor
-          (<code>npm run dev</code>). El lienzo funciona, pero fal responde 401.
+          No hay FAL_KEY: copia <code>.env.example</code> a <code>.env</code>, pon tu clave de fal y reinicia el servidor (<code>npm run dev</code>). El
+          lienzo funciona, pero fal responde 401.
+        </p>
+      )}
+      {hasDaydreamKey ? null : (
+        <p className="bg-neutral-3 text-neutral-11 px-6 py-2 text-xs">
+          StreamDiffusion está bloqueado: falta <code>DAYDREAM_API_KEY</code> en <code>.env</code> (y reiniciar el servidor).
         </p>
       )}
 
-      <main className="grid flex-1 gap-6 px-4 pb-6 md:px-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <main className="grid flex-1 gap-6 px-4 pb-6 md:px-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex min-w-0 flex-col gap-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Tabs value={layout} onValueChange={value => setLayout(value as Layout)} variant="underline">
@@ -527,181 +431,107 @@ export const Studio = () => {
                 <TabsTab value="overlay">Superpuesto</TabsTab>
               </TabsList>
             </Tabs>
-            <div className="flex flex-wrap items-center gap-3">
-              <Tabs value={lightbox} onValueChange={value => setLightbox(value as Lightbox)} variant="underline">
-                <TabsList>
-                  <TabsTab value="live">En vivo</TabsTab>
-                  <TabsTab value="reveal">Revelado</TabsTab>
-                </TabsList>
-              </Tabs>
-              <ModelPicker models={FINISH_MODELS} value={finishId} onChange={setFinishId} title="Render final" compact purpose="finish" />
-              <Button variant="outline" className="rounded-full" disabled={revealLoading || isEmpty} onClick={() => void reveal()}>
-                {revealLoading ? 'Revelando…' : 'Revelar'} <Kbd className="ml-2 opacity-70">R</Kbd>
-              </Button>
-            </div>
+            <span className="text-neutral-10 text-xs">
+              <Kbd>O</Kbd> cambia la vista · <Kbd>1</Kbd>-<Kbd>9</Kbd> estilos · <Kbd>Esc</Kbd> para el test
+              {isStream ? (
+                <>
+                  {' '}
+                  · <Kbd>L</Kbd> mide la latencia
+                </>
+              ) : null}
+            </span>
           </div>
 
           {layout === 'split' ? (
-            <div className="mx-auto grid w-full max-w-[calc((100dvh-300px)*2+1rem)] gap-4 sm:grid-cols-2">
-              <CanvasPanel
-                wrapperRef={wrapperRef}
-                onInk={markDirty}
-                className="aspect-square w-full"
-                emptyHint={isEmpty ? 'Dibuja aquí' : null}
-                corner={inputPreview}
-              />
+            <div className="mx-auto grid w-full max-w-[calc((100dvh-360px)*2+1rem)] gap-4 sm:grid-cols-2">
+              <CanvasPanel wrapperRef={wrapperRef} onInk={markDirty} className="aspect-square w-full" emptyHint={isEmpty ? 'Dibuja aquí' : null} corner={inputPreview} />
               <div className="aspect-square w-full">{outputPanel}</div>
             </div>
           ) : (
-            <div className="mx-auto aspect-square w-full max-w-[calc(100dvh-300px)] min-w-[280px]">
-              <CanvasPanel
-                wrapperRef={wrapperRef}
-                onInk={markDirty}
-                className="size-full"
-                underlay={outputPanel}
-                corner={inputPreview}
-              />
+            <div className="mx-auto aspect-square w-full max-w-[calc(100dvh-360px)] min-w-[280px]">
+              <CanvasPanel wrapperRef={wrapperRef} onInk={markDirty} className="size-full" underlay={outputPanel} corner={inputPreview} />
             </div>
           )}
 
-          {isDaydream ? (
-            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Entrada al modelo">
-              <span className="text-neutral-10 mr-1 text-xs">Entrada al modelo</span>
-              {INPUT_LOOKS.map(look => (
-                <button
-                  key={look.id}
-                  type="button"
-                  className="lab-chip"
-                  aria-pressed={settings.stream.inputLook === look.id}
-                  title={look.hint}
-                  onClick={() => setInputLook(look.id)}
-                >
-                  {look.label}
-                </button>
-              ))}
-              <span className="text-neutral-10 basis-full text-xs">
-                Tu lienzo no cambia: solo lo que recibe el modelo (miniatura en la esquina). En negro el fondo de la salida sale
-                oscuro y desaparece el contorno negro del trazo.
-              </span>
-            </div>
-          ) : null}
+          {isStream ? null : <HistoryStrip frames={frames} pinned={pinned} onPin={setPinned} />}
 
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
             <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="accent"
-                onClick={() => setRunning(current => !current)}
-                className="lab-cta min-w-44 rounded-full"
-                aria-pressed={running}
-              >
+              <Button variant="accent" onClick={() => setRunning(current => !current)} className="lab-cta min-w-44 rounded-full" aria-pressed={running}>
                 {running ? 'Parar el bucle' : 'Empezar en vivo'}
                 <Kbd className="ml-2 opacity-70">Espacio</Kbd>
               </Button>
 
-              {test ? (
+              <label className="border-neutralA-5 focus-within:border-accent-8 flex min-w-0 flex-1 items-center gap-2 rounded-full border px-4 py-2 sm:max-w-xs">
+                <span className="text-neutral-10 shrink-0 text-xs">Pista</span>
+                <input
+                  value={hintInput}
+                  onChange={event => setHintInput(event.target.value)}
+                  placeholder="qué es: cat, rocket, pizza…"
+                  className="placeholder:text-neutral-9 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                  aria-label="Pista: qué representa el dibujo"
+                />
+              </label>
+
+              {testing ? (
                 <Button variant="outline" className="rounded-full" onClick={stopTest}>
-                  Parar test · {test.label}
+                  Parar test <Kbd className="ml-2 opacity-70">Esc</Kbd>
                 </Button>
               ) : (
-                <>
-                  <Button variant="outline" className="rounded-full" onClick={() => void startTest(false)}>
-                    Test estándar <Kbd className="ml-2 opacity-70">T</Kbd>
-                  </Button>
-                  <Button variant="ghost" className="rounded-full" onClick={() => void startTest(true)}>
-                    Probar todos
-                  </Button>
-                </>
+                <Button variant="outline" className="rounded-full" onClick={() => void runTest()}>
+                  Test «{findSketch(testSketchId).word}» <Kbd className="ml-2 opacity-70">T</Kbd>
+                </Button>
               )}
 
-              {isDaydream ? (
+              {isStream ? (
                 <Button
                   variant="outline"
                   className="rounded-full"
-                  disabled={phase !== 'live' || stream.probing || Boolean(test)}
+                  disabled={phase !== 'live' || stream.probing || testing}
                   onClick={() => void probe()}
-                  title="Pone el lienzo en negro 5 veces y mide cuánto tarda la salida en oscurecerse"
+                  title="Pone la entrada en plano 5 veces y mide cuánto tarda la salida en seguirla"
                 >
                   {stream.probing ? 'Midiendo…' : 'Medir latencia'} <Kbd className="ml-2 opacity-70">L</Kbd>
                 </Button>
               ) : null}
-
-              <Button
-                variant="ghost"
-                className="rounded-full"
-                disabled={!metrics.received || Boolean(test)}
-                onClick={() => void saveCurrent(false)}
-              >
-                Guardar medida <Kbd className="ml-2 opacity-70">G</Kbd>
-              </Button>
-
             </div>
 
-            <div className="flex flex-col gap-3 md:flex-row md:items-center">
-              <label className="border-neutralA-5 focus-within:border-accent-8 flex min-w-0 items-center gap-2 rounded-full border px-4 py-2 md:w-64">
-                <span className="text-neutral-10 shrink-0 text-xs">Palabra</span>
-                <input
-                  value={subject}
-                  onChange={event => setSubject(event.target.value)}
-                  placeholder="cohete, gato, taza…"
-                  className="placeholder:text-neutral-9 min-w-0 flex-1 bg-transparent text-sm outline-none"
-                />
-              </label>
+            <StrengthControl
+              value={strength}
+              onChange={setStrength}
+              readout={isStream ? describeStreamStrength(strength, streamSettings) : undefined}
+              hint={
+                isStream
+                  ? 'En StreamDiffusion no hay escalera de frases: el valor mueve el t_index (cuánto del dibujo sobrevive al ruido) y afloja el ControlNet de líneas.'
+                  : undefined
+              }
+            />
 
-              <div className="lab-scroll-x flex min-w-0 flex-1 gap-2 overflow-x-auto pr-8" role="group" aria-label="Estilo">
-                {STYLE_PRESETS.map((candidate, index) => (
-                  <button
-                    key={candidate.id}
-                    type="button"
-                    className="lab-chip"
-                    aria-pressed={candidate.id === presetId}
-                    onClick={() => setPresetId(candidate.id)}
-                    title={index < 9 ? `Tecla ${index + 1}` : undefined}
-                  >
-                    {candidate.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <StylePicker value={styleId} onChange={setStyleId} />
 
-            {error || revealError || notice ? (
-              <p className="text-error-11 text-sm" role="alert">
-                {notice ?? revealError ?? error}
+            {error || notice ? (
+              <p className={`${notice ? 'text-neutral-11' : 'text-error-11'} text-sm`} role="status">
+                {notice ?? error}
               </p>
             ) : null}
           </div>
 
-          <LatencyTape
-            metrics={metrics}
-            stats={stats}
-            waitingMs={waitingMs}
-            cost={cost}
-            costNote={model.billing.note}
-            streamed={isDaydream}
-          />
+          <LatencyTape metrics={metrics} stats={stats} waitingMs={waitingMs} cost={cost} streamed={isStream} />
         </div>
 
         <aside className="border-neutralA-4 flex flex-col gap-5 xl:border-l xl:pl-6">
-          <Tabs value={panel} onValueChange={value => setPanel(String(value))} variant="underline">
-            <TabsList>
-              <TabsTab value="settings">Ajustes</TabsTab>
-              <TabsTab value="results">Resultados{runs.length ? ` · ${runs.length}` : ''}</TabsTab>
-            </TabsList>
-          </Tabs>
-
-          {panel === 'settings' ? (
-            <SettingsPanel model={model} settings={settings} onChange={next => setSettings(current => ({ ...current, ...next }))} />
-          ) : (
-            <ResultsPanel
-              runs={runs}
-              onDelete={id => setRuns(current => deleteRun(current, id))}
-              onClear={() => setRuns(clearRuns())}
-            />
-          )}
-
-          <details className="text-neutral-10 mt-auto text-xs">
-            <summary className="lab-focus cursor-pointer select-none">Prompt enviado</summary>
-            <p className="mt-2 font-mono leading-relaxed">{(isDaydream && settings.stream.prompt.trim()) || prompt}</p>
-          </details>
+          <h2 className="text-neutral-10 text-[11px] tracking-wide uppercase">Ajustes · {ENGINE_LABEL[engine]}</h2>
+          <SettingsPanel
+            engine={engine}
+            settings={settings}
+            onChange={next => setSettings(current => ({ ...current, ...next }))}
+            stream={streamSettings}
+            onStream={next => setStreamSettings(current => ({ ...current, ...next }))}
+            strength={strength}
+            testSketchId={testSketchId}
+            onTestSketch={setTestSketchId}
+            prompt={isStream ? streamSettings.prompt.trim() || streamPrompt : prompt}
+          />
         </aside>
       </main>
     </div>

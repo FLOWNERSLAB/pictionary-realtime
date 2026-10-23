@@ -1,27 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { LiveModel } from '../data/models';
-import { errorMessage, fal, flaggedAsNsfw, imageUrlFromResult, isBlankFrame, realtimeToken } from '../lib/fal';
+import type { Settings } from '../data/model';
+import { MODEL, buildInput } from '../data/model';
+import { imageUrlFromResult, isBlankFrame, realtimeToken } from '../lib/fal';
 import type { Metrics } from '../lib/metrics';
 import { EMPTY_METRICS, pushSample } from '../lib/metrics';
 import { rasterizeSvg } from '../lib/raster';
 import type { RealtimeSocket } from '../lib/realtime-socket';
 import { createRealtimeSocket } from '../lib/realtime-socket';
 
-export type LiveRenderOptions = {
-  model: LiveModel;
-  enabled: boolean;
-  /** Minimum milliseconds between two frames sent to the model. */
-  throttleMs: number;
-  prompt: string;
-  negative: string;
-  steps: number;
+export type FrameMeta = {
+  styleId: string;
+  styleLabel: string;
   strength: number;
-  feedback: number;
-  seed: number;
-  scheduleMu: number;
-  interpolate: boolean;
-  hd: boolean;
+  rungLabel: string;
+  hint: string;
+};
+
+export type LiveFrame = FrameMeta & {
+  id: number;
+  url: string;
+  /** Round trip in ms; null for a late answer whose request was already written off. */
+  latencyMs: number | null;
+  at: number;
+  prompt: string;
+};
+
+export type LiveRenderOptions = {
+  enabled: boolean;
+  prompt: string;
+  settings: Settings;
+  /** Gaussian blur on the raster, in px: the high end of AI Strength. */
+  inputBlur: number;
+  /** What the frame was asked for, kept with it in the history. */
+  meta: FrameMeta;
   /** With an empty canvas there is nothing to interpret, so nothing is sent. */
   hasDrawing: boolean;
   getSvg: () => SVGSVGElement | null;
@@ -34,22 +46,23 @@ export type LivePhase = 'off' | 'connecting' | 'cold' | 'live' | 'error';
 /** Compute is billed while the guest is drawing; this long without ink counts as idle. */
 const IDLE_AFTER_MS = 2000;
 
-/** The loop polls this often; `throttleMs` is the minimum spacing between sends. */
+/** The loop polls this often; `settings.throttleMs` is the minimum spacing between sends. */
 const TICK_MS = 40;
 
+/** Frames kept for the history strip; older object URLs are revoked. */
+const HISTORY = 18;
+
 /**
- * A frame with no answer after this long is written off, so the loop never wedges.
- * The first frame of a session gets far longer: fal boots the model on demand and
- * a cold endpoint has taken over three minutes to answer its first request.
+ * The first frame of a session gets long: fal boots the model on demand and a cold
+ * endpoint has taken over three minutes to answer its first request.
  */
-const FRAME_TIMEOUT_MS = 15000;
 const COLD_START_TIMEOUT_MS = 240000;
 
 /**
  * On a warm socket a frame takes ~0,5-0,9 s, so one with no answer after a few
  * times the median is lost (fal dropped it, or the socket died quietly), not slow.
  * It is written off and the newest drawing goes out again; a second stall in a row
- * recycles the socket. Before this, a lost frame froze the loop for the full 15 s.
+ * recycles the socket. Before this, a lost frame froze the loop for 15 s.
  */
 const STALL_FLOOR_MS = 2500;
 const STALL_CEILING_MS = 6000;
@@ -69,7 +82,7 @@ const median = (values: number[]) => {
  * is waiting for sits behind an older one and the felt lag doubles.
  */
 export const useLiveRender = (options: LiveRenderOptions) => {
-  const [output, setOutput] = useState<string | null>(null);
+  const [frames, setFrames] = useState<LiveFrame[]>([]);
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
   const [error, setError] = useState<string | null>(null);
   const [blankWarning, setBlankWarning] = useState<string | null>(null);
@@ -84,13 +97,15 @@ export const useLiveRender = (options: LiveRenderOptions) => {
 
   /** Send time of the frame in flight, or null. Only one at a time. */
   const inFlight = useRef<number | null>(null);
-  /** Bumped on reset, so an answer from a previous model or session is ignored. */
+  /** What the frame in flight asked for. */
+  const inFlightMeta = useRef<{ meta: FrameMeta; prompt: string } | null>(null);
+  /** Bumped on reset, so an answer from a previous session is ignored. */
   const generation = useRef(0);
+  const frameId = useRef(0);
   const lastFrame = useRef(-1);
   const lastSend = useRef(0);
   const lastInk = useRef(0);
   const lastInkFrame = useRef(-1);
-  const objectUrl = useRef<string | null>(null);
   const warmRef = useRef(false);
   /** Last raster had no real ink; answers still in flight for it are dropped. */
   const blankCanvas = useRef(false);
@@ -101,32 +116,36 @@ export const useLiveRender = (options: LiveRenderOptions) => {
   const stalls = useRef(0);
   /** Prompt of the last frame sent: a new style goes out without the old frame's memory. */
   const lastPrompt = useRef<string | null>(null);
+  const connection = useRef<RealtimeSocket | null>(null);
 
-  const publish = useCallback((url: string | null) => {
-    // Revoked a beat later: the crossfade still paints the previous frame.
-    const previous = objectUrl.current;
+  const push = useCallback((frame: LiveFrame | null) => {
+    setFrames(current => {
+      const next = frame ? [...current, frame] : [];
+      const evicted = next.length > HISTORY ? next.splice(0, next.length - HISTORY) : current.filter(() => !frame);
 
-    if (previous) window.setTimeout(() => URL.revokeObjectURL(previous), 1500);
+      // Revoked a beat later: the crossfade still paints the previous frame.
+      window.setTimeout(() => evicted.forEach(old => old.url.startsWith('blob:') && URL.revokeObjectURL(old.url)), 1500);
 
-    objectUrl.current = url?.startsWith('blob:') ? url : null;
-    setOutput(url);
+      return next;
+    });
   }, []);
-
-  const frameTimeout = () => (warmRef.current ? FRAME_TIMEOUT_MS : COLD_START_TIMEOUT_MS);
 
   /** How long the frame in flight may take before it counts as lost. */
   const stallTimeout = () => {
     if (!warmRef.current) return COLD_START_TIMEOUT_MS;
-    if (latest.current.model.transport !== 'ws') return FRAME_TIMEOUT_MS;
 
     return Math.min(STALL_CEILING_MS, Math.max(STALL_FLOOR_MS, STALL_FACTOR * median(recent.current)));
   };
 
   const receive = useCallback(
-    (result: unknown, sentAt: number | null, gen: number) => {
+    (result: unknown, gen: number) => {
       if (gen !== generation.current) return;
 
+      const sentAt = inFlight.current;
+      const asked = inFlightMeta.current;
+
       inFlight.current = null;
+      inFlightMeta.current = null;
       warmRef.current = true;
       setWarm(true);
 
@@ -136,12 +155,11 @@ export const useLiveRender = (options: LiveRenderOptions) => {
       if (!url || blankCanvas.current || !latest.current.hasDrawing) return;
 
       const now = performance.now();
+      const latency = sentAt === null ? null : now - sentAt;
 
       // A late answer to a frame already written off still paints (it is newer than
       // what is on screen) but its round trip is unknown, so it is not a sample.
-      if (sentAt !== null) {
-        const latency = now - sentAt;
-
+      if (latency !== null) {
         stalls.current = 0;
         recent.current = [...recent.current, latency].slice(-12);
         setMetrics(current => pushSample(current, latency, now));
@@ -153,7 +171,8 @@ export const useLiveRender = (options: LiveRenderOptions) => {
         if (gen !== generation.current) return;
 
         if (!blank) {
-          publish(url);
+          frameId.current += 1;
+          push({ ...(asked?.meta ?? latest.current.meta), prompt: asked?.prompt ?? latest.current.prompt, id: frameId.current, url, latencyMs: latency, at: Date.now() });
           setError(null);
           setBlankWarning(null);
 
@@ -163,19 +182,16 @@ export const useLiveRender = (options: LiveRenderOptions) => {
         if (url.startsWith('blob:')) URL.revokeObjectURL(url);
 
         setMetrics(current => ({ ...current, blocked: current.blocked + 1 }));
-        setBlankWarning(
-          flaggedAsNsfw(result)
-            ? 'El filtro NSFW del proveedor ha devuelto un frame en negro. Se mantiene el anterior.'
-            : 'El modelo ha devuelto un frame en negro. Se mantiene el anterior.',
-        );
+        setBlankWarning('fal ha devuelto un frame en negro (filtro de seguridad). Se mantiene el anterior.');
       });
     },
-    [publish],
+    [push],
   );
 
   const reset = useCallback(() => {
     generation.current += 1;
     inFlight.current = null;
+    inFlightMeta.current = null;
     lastFrame.current = -1;
     lastPrompt.current = null;
     recent.current = [];
@@ -185,38 +201,30 @@ export const useLiveRender = (options: LiveRenderOptions) => {
     setMetrics(EMPTY_METRICS);
     setError(null);
     setBlankWarning(null);
-    publish(null);
-  }, [publish]);
+    push(null);
+  }, [push]);
 
-  /** Starts a fresh measurement without dropping the warm connection or the frame on screen. */
+  /** Starts a fresh measurement without dropping the warm socket or the frames on screen. */
   const clearMetrics = useCallback(() => setMetrics(EMPTY_METRICS), []);
 
-  const { model, enabled } = options;
-  const transport = model.transport;
+  const { enabled } = options;
 
-  // Switching models wipes the panel: otherwise the previous model's last frame stays
-  // on screen while the new one warms up, and looks like the new model's answer.
+  // One socket while the loop is on, opened now so the first stroke finds it warm.
   useEffect(() => {
-    reset();
-  }, [model.id, reset]);
-
-  // One socket per model while the loop is on, opened now so the first stroke finds it warm.
-  const connection = useRef<RealtimeSocket | null>(null);
-
-  useEffect(() => {
-    if (!enabled || transport !== 'ws') return;
+    if (!enabled) return;
 
     const gen = generation.current;
 
     connection.current = createRealtimeSocket({
-      app: model.endpoint,
+      app: MODEL.endpoint,
       token: realtimeToken,
       // The socket does not echo request ids; with one frame in flight it needs none.
-      onResult: result => receive(result, inFlight.current, gen),
+      onResult: result => receive(result, gen),
       onError: message => {
         if (gen !== generation.current) return;
 
         inFlight.current = null;
+        inFlightMeta.current = null;
         setError(message);
         setMetrics(current => ({ ...current, errors: current.errors + 1 }));
       },
@@ -225,6 +233,7 @@ export const useLiveRender = (options: LiveRenderOptions) => {
         if (gen !== generation.current || inFlight.current === null) return;
 
         inFlight.current = null;
+        inFlightMeta.current = null;
         lastFrame.current = -1;
         setMetrics(current => ({ ...current, dropped: current.dropped + 1 }));
         console.info(`[live] ${reason}: se reenvía el último dibujo`);
@@ -235,72 +244,29 @@ export const useLiveRender = (options: LiveRenderOptions) => {
       connection.current?.close();
       connection.current = null;
     };
-  }, [enabled, model.endpoint, model.id, receive, transport]);
+  }, [enabled, receive]);
 
-  const send = useCallback(
-    async (imageDataUrl: string) => {
-      const current = latest.current;
-      const gen = generation.current;
-      const styleKey = `${current.prompt}\n${current.negative}`;
-      // With memory on, the first frame of a new style would still blend the old
-      // style's latent and the change would creep in over several frames.
-      const newStyle = lastPrompt.current !== null && lastPrompt.current !== styleKey;
+  const send = useCallback((imageDataUrl: string) => {
+    const current = latest.current;
 
-      lastPrompt.current = styleKey;
+    if (!connection.current) return;
 
-      const input = current.model.buildInput({
-        prompt: current.prompt,
-        negative: current.negative,
-        imageDataUrl,
-        steps: current.steps,
-        strength: current.strength,
-        feedback: newStyle ? 1 : current.feedback,
-        seed: current.seed,
-        scheduleMu: current.scheduleMu,
-        interpolate: current.interpolate,
-        hd: current.hd,
-      });
-      const sentAt = performance.now();
+    // With memory on, the first frame of a new style would still blend the old
+    // style's latent and the change would creep in over several frames.
+    const newStyle = lastPrompt.current !== null && lastPrompt.current !== current.prompt;
 
-      inFlight.current = sentAt;
-      lastSend.current = sentAt;
-      setMetrics(previous => ({ ...previous, sent: previous.sent + 1 }));
+    lastPrompt.current = current.prompt;
 
-      if (current.model.transport === 'ws') {
-        if (!connection.current) {
-          inFlight.current = null;
+    const settings = newStyle ? { ...current.settings, memory: 0 } : current.settings;
+    const input = buildInput({ prompt: current.prompt, imageDataUrl, settings });
+    const sentAt = performance.now();
 
-          return;
-        }
-
-        connection.current.send(input);
-
-        return;
-      }
-
-      try {
-        const { data } = await fal.subscribe(current.model.endpoint, {
-          input,
-          abortSignal: AbortSignal.timeout(frameTimeout()),
-        });
-
-        receive(data, sentAt, gen);
-      } catch (fault) {
-        if (gen !== generation.current) return;
-
-        inFlight.current = null;
-
-        if ((fault as Error)?.name === 'TimeoutError' || (fault as Error)?.name === 'AbortError') {
-          setMetrics(previous => ({ ...previous, timedOut: previous.timedOut + 1 }));
-          setError(`Sin respuesta en ${Math.round(frameTimeout() / 1000)} s. El endpoint no contesta.`);
-        } else {
-          setError(errorMessage(fault));
-          setMetrics(previous => ({ ...previous, errors: previous.errors + 1 }));
-        }
-      }
-    },
-    [receive],
-  );
+    inFlight.current = sentAt;
+    inFlightMeta.current = { meta: current.meta, prompt: current.prompt };
+    lastSend.current = sentAt;
+    setMetrics(previous => ({ ...previous, sent: previous.sent + 1 }));
+    connection.current.send(input);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -323,7 +289,7 @@ export const useLiveRender = (options: LiveRenderOptions) => {
 
         if (lastFrame.current !== frame) {
           lastFrame.current = frame;
-          publish(null);
+          push(null);
         }
 
         return;
@@ -334,19 +300,20 @@ export const useLiveRender = (options: LiveRenderOptions) => {
 
         // Written off as lost: resend the newest drawing even if nothing changed since.
         inFlight.current = null;
+        inFlightMeta.current = null;
         lastFrame.current = -1;
         stalls.current += 1;
         setMetrics(previous => ({ ...previous, timedOut: previous.timedOut + 1 }));
 
         // Twice in a row with the socket still open: fal is not answering on it any more.
-        if (current.model.transport === 'ws' && stalls.current >= STALLS_BEFORE_RECYCLE) {
+        if (stalls.current >= STALLS_BEFORE_RECYCLE) {
           stalls.current = 0;
           connection.current?.recycle('dos frames sin respuesta');
         }
       }
 
       if (frame === lastFrame.current) return;
-      if (now - lastSend.current < current.throttleMs) return;
+      if (now - lastSend.current < current.settings.throttleMs) return;
 
       const svg = current.getSvg();
 
@@ -354,22 +321,20 @@ export const useLiveRender = (options: LiveRenderOptions) => {
 
       lastFrame.current = frame;
 
-      const raster = await rasterizeSvg(svg, current.model.inputSize);
+      const raster = await rasterizeSvg(svg, MODEL.inputSize, MODEL.jpegQuality, current.inputBlur);
 
       if (cancelled || !raster) return;
 
       // Specks and eraser leftovers are not a drawing: keep the light box empty.
       if (!raster.dataUrl) {
         blankCanvas.current = true;
-        publish(null);
+        push(null);
 
         return;
       }
 
       blankCanvas.current = false;
-
-      // Not awaited: an HTTP frame resolves on its own and must not hold the tick.
-      void send(raster.dataUrl);
+      send(raster.dataUrl);
     };
 
     // Rasterizing a busy canvas can outlast the 40 ms tick. Without this guard two
@@ -386,7 +351,7 @@ export const useLiveRender = (options: LiveRenderOptions) => {
         });
     }, TICK_MS);
 
-    // Billing clock and the "waiting for an answer" read-out, once per second is plenty.
+    // Billing clock and the "waiting for an answer" read-out, four times a second is plenty.
     const clock = window.setInterval(() => {
       const now = performance.now();
 
@@ -402,14 +367,40 @@ export const useLiveRender = (options: LiveRenderOptions) => {
       window.clearInterval(clock);
       setWaitingMs(0);
     };
-  }, [enabled, publish, send]);
+  }, [enabled, push, send]);
+
+  // Stopping the loop keeps the frames on screen; the next start measures afresh.
+  useEffect(() => {
+    if (enabled) return;
+
+    generation.current += 1;
+    inFlight.current = null;
+    inFlightMeta.current = null;
+    lastFrame.current = -1;
+    lastPrompt.current = null;
+    warmRef.current = false;
+  }, [enabled]);
+
+  // `warm` only means something while the loop is on; a restart starts cold.
+  const [warmFor, setWarmFor] = useState(false);
+
+  if (warmFor !== enabled) {
+    setWarmFor(enabled);
+    if (!enabled) setWarm(false);
+  }
 
   useEffect(
     () => () => {
-      if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+      setFrames(current => {
+        current.forEach(frame => frame.url.startsWith('blob:') && URL.revokeObjectURL(frame.url));
+
+        return [];
+      });
     },
     [],
   );
+
+  const output = frames.at(-1) ?? null;
 
   const phase: LivePhase = !enabled
     ? 'off'
@@ -421,5 +412,5 @@ export const useLiveRender = (options: LiveRenderOptions) => {
           ? 'cold'
           : 'connecting';
 
-  return { output, metrics, error, blankWarning, reset, clearMetrics, transport, waitingMs, warm, phase };
+  return { frames, output, metrics, error: enabled ? error : null, blankWarning, reset, clearMetrics, waitingMs, warm, phase };
 };

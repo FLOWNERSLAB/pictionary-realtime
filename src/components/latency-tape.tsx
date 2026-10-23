@@ -5,12 +5,8 @@ type LatencyTapeProps = {
   metrics: Metrics;
   stats: MetricsSummary;
   waitingMs: number;
-  cost: number | null;
-  costNote: string;
-  /**
-   * WebRTC stream: frames arrive continuously, so FPS is live from the start,
-   * but latency only exists once the blackout probe ran (key L).
-   */
+  cost: number;
+  /** WebRTC stream: FPS is live from the start, latency only once the probe ran (key L). */
   streamed?: boolean;
 };
 
@@ -19,14 +15,14 @@ const SLOTS = 60;
 const CEILING_MS = 2400;
 const GUIDES = [500, 1000, 2000];
 
-const tone = (ms: number) => (ms <= 700 ? 'var(--color-accent-9)' : ms <= 1400 ? 'var(--color-warning-9)' : 'var(--color-error-9)');
+const tone = (ms: number) => (ms <= 800 ? 'var(--color-accent-9)' : ms <= 1500 ? 'var(--color-warning-9)' : 'var(--color-error-9)');
 
 /**
  * The signature of the lab: every frame leaves one tick on a tape, like a
  * seismograph. Tall ticks are slow frames; the gap on the right is the frame
  * still out, growing until it lands.
  */
-export const LatencyTape = ({ metrics, stats, waitingMs, cost, costNote, streamed = false }: LatencyTapeProps) => {
+export const LatencyTape = ({ metrics, stats, waitingMs, cost, streamed = false }: LatencyTapeProps) => {
   const samples = metrics.samples.slice(-(SLOTS - 1));
   const width = 100 / SLOTS;
   const height = (ms: number) => Math.max(2, (Math.min(ms, CEILING_MS) / CEILING_MS) * 100);
@@ -40,7 +36,6 @@ export const LatencyTape = ({ metrics, stats, waitingMs, cost, costNote, streame
             {format(stats.p50)}
           </span>
         ) : (
-          // Humane has no dash glyph worth showing: an empty meter reads as a white bar.
           <span className="text-neutral-9 mb-1 font-mono text-2xl">{streamed ? 'pulsa L' : 'sin datos'}</span>
         )}
         <span className="text-neutral-11 mb-2 flex flex-col text-xs leading-tight">
@@ -92,24 +87,17 @@ export const LatencyTape = ({ metrics, stats, waitingMs, cost, costNote, streame
         ) : null}
       </svg>
 
-      <dl className="grid grid-cols-3 gap-x-6 gap-y-2 self-end text-sm md:grid-cols-3">
+      <dl className="grid grid-cols-3 gap-x-6 gap-y-2 self-end text-sm">
         <Figure label="FPS reales" value={hasData || (streamed && stats.fps) ? format(stats.fps, 1) : '-'} />
         <Figure label="p90" value={hasData ? `${format(stats.p90)} ms` : '-'} />
-        <Figure
-          label="1er frame"
-          value={metrics.firstFrameMs === null ? '-' : `${format(metrics.firstFrameMs / 1000, 1)} s`}
-        />
-        <Figure
-          label={streamed ? 'Mediciones' : 'Frames'}
-          value={`${metrics.received}/${metrics.sent}`}
-          title={streamed ? 'Rondas del test de apagado que obtuvieron respuesta' : undefined}
-        />
+        <Figure label="1er frame" value={metrics.firstFrameMs === null ? '-' : `${format(metrics.firstFrameMs / 1000, 1)} s`} />
+        <Figure label={streamed ? 'Mediciones' : 'Frames'} value={`${metrics.received}/${metrics.sent}`} />
         <Figure
           label="Fallos"
           value={String(metrics.errors + metrics.timedOut + metrics.blocked)}
-          title={`${metrics.errors} errores · ${metrics.timedOut} sin respuesta · ${metrics.dropped} por socket cerrado (reenviados) · ${metrics.blocked} en negro por el filtro NSFW`}
+          title={`${metrics.errors} errores · ${metrics.timedOut} sin respuesta · ${metrics.dropped} por socket cerrado (reenviados) · ${metrics.blocked} en negro por el filtro`}
         />
-        <Figure label="Coste" value={cost === null ? 's/d' : `${format(cost, 3)} $`} title={costNote} />
+        <Figure label="Coste" value={streamed ? 's/d' : `${format(cost, 3)} $`} title={streamed ? 'API de Daydream sin precio publicado' : '0,00194 $ por segundo de cómputo mientras hay tinta en el lienzo'} />
       </dl>
     </section>
   );

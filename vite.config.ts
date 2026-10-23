@@ -15,11 +15,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
   return {
-    plugins: [
-      react(),
-      tailwindcss(),
-      labApi({ FAL_KEY: env.FAL_KEY, DAYDREAM_API_KEY: env.DAYDREAM_API_KEY }),
-    ],
+    plugins: [react(), tailwindcss(), labApi({ FAL_KEY: env.FAL_KEY, DAYDREAM_API_KEY: env.DAYDREAM_API_KEY })],
     resolve: { conditions },
     server: { port: 5178 },
   };

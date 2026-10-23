@@ -10,32 +10,28 @@
  * extensionless import fails at runtime.
  *
  * Routes, all under /api:
- * - GET  fal/status                    → { hasKey }
- * - POST fal/token                     → realtime token for an allowed app
- * - *    fal/proxy                     → same contract as @fal-ai/server-proxy
- * - GET  daydream/status               → { hasKey }
- * - POST daydream/streams              → create a stream, returns its WHIP url
- * - PATCH daydream/streams/:id         → hot-update prompt, seed, ControlNet weights
- * - GET  daydream/streams/:id/status   → gateway status (why Daydream cut a stream)
+ * - GET  fal/status                  → { hasKey }
+ * - POST fal/token                   → short-lived realtime token for klein realtime
+ * - GET  daydream/status             → { hasKey }
+ * - POST daydream/streams            → create a StreamDiffusion stream, returns its WHIP url
+ * - PATCH daydream/streams/:id       → hot-update prompt, seed, t_index, ControlNet weights
+ * - GET  daydream/streams/:id/status → gateway status (why Daydream cut a stream)
+ *
+ * The frames themselves go browser ↔ provider (fal's WebSocket, Livepeer's WebRTC);
+ * the server never sees an image.
  */
 
 export type LabEnv = { FAL_KEY?: string; DAYDREAM_API_KEY?: string };
 
 /**
- * fal endpoints with a realtime WebSocket worker: the token route only mints for
- * these, or anyone who reaches the server could mint tokens for any fal app on the
- * team key. Keep in sync with src/data/endpoints.ts.
+ * The only app the token route mints for. Anyone who reaches the server could
+ * otherwise mint tokens for any fal app on the team key.
  */
-const REALTIME_APPS = ['fal-ai/flux-2/klein/realtime'];
+const REALTIME_APP = 'fal-ai/flux-2/klein/realtime';
 
 const FAL_REST_URL = 'https://rest.alpha.fal.ai';
 const TOKEN_EXPIRATION_SECONDS = 120;
-const FAL_TARGET_HEADER = 'x-fal-target-url';
-const FAL_HOSTS = [/(^|\.)fal\.ai$/, /(^|\.)fal\.run$/, /(^|\.)fal\.media$/];
 const DAYDREAM_URL = 'https://api.daydream.live/v1/streams';
-
-/** Hop-by-hop or already-decoded: forwarding them breaks the body. */
-const DROPPED_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding', 'connection'];
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -43,26 +39,15 @@ const json = (status: number, body: unknown) =>
 /** `fal-ai/flux-2/klein/realtime` is allowed by its app alias, `flux-2`. */
 const appAlias = (app: string) => app.split('/')[1] ?? app;
 
-const forward = async (upstream: Response) => {
-  const headers = new Headers();
-
-  upstream.headers.forEach((value, name) => {
-    if (!DROPPED_HEADERS.includes(name)) headers.set(name, value);
-  });
-
-  return new Response(await upstream.arrayBuffer(), { status: upstream.status, headers });
-};
-
 /**
- * Realtime tokens are minted here instead of through the generic proxy. fal ignores
- * `allowed_apps` when the request carries `x-fal-client-proxy` and returns a token
- * allowed for nothing, which the socket then rejects with `Forbidden`.
+ * Minted here, not through a generic proxy: fal ignores `allowed_apps` when the
+ * request carries `x-fal-client-proxy` and returns a token allowed for nothing,
+ * which the socket then rejects with `Forbidden`.
  */
 const falToken = async (request: Request, key: string) => {
   const { app } = (await request.json().catch(() => ({}))) as { app?: string };
 
-  if (!app) return json(400, { error: 'Missing app' });
-  if (!REALTIME_APPS.includes(app)) return json(403, { error: `Realtime app not allowed: ${app}` });
+  if (app !== REALTIME_APP) return json(403, { error: `Realtime app not allowed: ${app ?? '(none)'}` });
 
   const upstream = await fetch(`${FAL_REST_URL}/tokens/`, {
     method: 'POST',
@@ -75,41 +60,6 @@ const falToken = async (request: Request, key: string) => {
     status: upstream.ok ? 200 : upstream.status,
     headers: { 'content-type': 'text/plain' },
   });
-};
-
-/** The browser client puts the real fal URL in `x-fal-target-url`; this attaches the key. */
-const falProxy = async (request: Request, key: string) => {
-  const targetUrl = request.headers.get(FAL_TARGET_HEADER);
-
-  if (!targetUrl) return json(400, { error: `Missing ${FAL_TARGET_HEADER} header` });
-
-  let target: URL;
-
-  try {
-    target = new URL(targetUrl);
-  } catch {
-    return json(400, { error: `Invalid ${FAL_TARGET_HEADER}: ${targetUrl}` });
-  }
-
-  if (!FAL_HOSTS.some(pattern => pattern.test(target.hostname))) return json(412, { error: `Host not allowed: ${target.hostname}` });
-
-  const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer();
-
-  try {
-    return await forward(
-      await fetch(target, {
-        method: request.method,
-        body,
-        headers: {
-          authorization: `Key ${key}`,
-          'content-type': request.headers.get('content-type') ?? 'application/json',
-          accept: request.headers.get('accept') ?? 'application/json',
-        },
-      }),
-    );
-  } catch (error) {
-    return json(502, { error: `Proxy request failed: ${(error as Error).message}` });
-  }
 };
 
 /**
@@ -137,17 +87,18 @@ const daydream = async (request: Request, rest: string, key: string) => {
   }
 };
 
-/** `path` is what follows /api/, e.g. "fal/proxy" or "daydream/streams/str_x/status". */
+/** `path` is what follows /api/, e.g. "fal/token" or "daydream/streams/str_x/status". */
 export const handleApi = async (request: Request, path: string, env: LabEnv): Promise<Response> => {
   const route = path.replace(/^\/+|\/+$/g, '');
 
   if (route === 'fal/status') return json(200, { hasKey: Boolean(env.FAL_KEY) });
   if (route === 'daydream/status') return json(200, { hasKey: Boolean(env.DAYDREAM_API_KEY) });
 
-  if (route === 'fal/token' || route === 'fal/proxy') {
+  if (route === 'fal/token') {
+    if (request.method !== 'POST') return json(405, { error: 'POST only' });
     if (!env.FAL_KEY) return json(401, { error: 'Falta FAL_KEY: en local va en .env (y reiniciar); en Vercel, en Environment Variables.' });
 
-    return route === 'fal/token' ? falToken(request, env.FAL_KEY) : falProxy(request, env.FAL_KEY);
+    return falToken(request, env.FAL_KEY);
   }
 
   if (route === 'daydream/streams' || route.startsWith('daydream/streams/')) {
