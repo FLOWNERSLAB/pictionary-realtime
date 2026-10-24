@@ -1,0 +1,307 @@
+{
+  "_rules": [
+    "A style is a treatment of the render, never the word being drawn: it says how the picture is made (camera, material, medium, world), how it is lit, which colours it uses and what sits behind.",
+    "No object noun klein could draw instead of the sketch (no 'toy', 'figurine', 'sign', 'vase', 'plush'). A style may name a WORLD the drawing is read in (product design, brutalist building, game asset, sprouts on moss, fossil): that is Krea's trick and it is allowed, because the world is not the word.",
+    "The more concrete the look, the better klein follows it: name the exact material, finish, tool marks and lens. 'colorful' or 'nice' say nothing to it.",
+    "Each style has: look (imperative, how it is rendered), light, palette (named colours), backdrop (plain phrase without 'background'), tags (CLIP tags for StreamDiffusion, most important first, no object nouns).",
+    "The subject comes only from the sketch, the hint word or the live guess; the fidelity sentence comes from AI Strength (src/lib/prompt.ts)."
+  ],
+  "groups": {
+    "photo": "Foto",
+    "render": "Render",
+    "material": "Materia",
+    "art": "Arte"
+  },
+  "styles": [
+    {
+      "id": "photo",
+      "group": "photo",
+      "label": "Natural",
+      "look": "Photograph it with a real camera in natural daylight, true-to-life materials and textures, 50 mm lens, slight depth of field",
+      "light": "soft natural daylight",
+      "palette": "true-to-life colors",
+      "backdrop": "a simple real-world setting",
+      "tags": "photorealistic, natural daylight, 50mm, true-to-life colors, sharp detail"
+    },
+    {
+      "id": "product",
+      "group": "photo",
+      "label": "Producto",
+      "look": "Render it as an HD photorealistic render of a high-end physical product design: clean industrial-design surfaces, matte anodised aluminium, soft-touch polymer and brushed steel details, precise seams, chamfers and parting lines, hero three-quarter view",
+      "light": "a large softbox with a smooth gradient and a soft contact shadow",
+      "palette": "warm grey, graphite, bone white and one brushed-steel accent",
+      "backdrop": "a seamless warm grey studio sweep",
+      "tags": "photorealistic product design render, industrial design, anodised aluminium, brushed steel, soft-touch polymer, studio softbox"
+    },
+    {
+      "id": "sprout",
+      "group": "photo",
+      "label": "Brote",
+      "look": "Photograph it as a 4K nature macro where the drawn shapes have grown into living green sprouts, stems and leaves rising out of a bed of damp moss, dew drops on the leaves, visible leaf veins",
+      "light": "soft overcast forest light",
+      "palette": "fresh lime green, deep moss green and dark loam",
+      "backdrop": "a bed of damp moss with blurred ferns",
+      "tags": "4k nature macro photo, living green sprouts, leaves, damp moss, dew drops, overcast forest light"
+    },
+    {
+      "id": "lowpoly",
+      "group": "render",
+      "label": "Low poly",
+      "look": "Render it as a polished low-poly 3D model: crisp hard-edged triangular facets, perfectly flat shading per facet, a sharp clean silhouette, no soft or rounded surfaces, rendered in a modern 3D engine with studio HDRI lighting, subtle ambient occlusion and one clean specular highlight per facet, game-art quality",
+      "light": "three-point studio lighting with a soft HDRI reflection and a crisp key light",
+      "palette": "clean matte sage, sand, terracotta and slate, one flat colour per facet",
+      "backdrop": "a plain mid-grey studio floor with a soft contact shadow",
+      "tags": "polished low poly 3d render, hard-edged facets, flat shading, studio hdri lighting, ambient occlusion, game art"
+    },
+    {
+      "id": "hologram",
+      "group": "render",
+      "label": "Holograma",
+      "look": "Render it as a glowing blue holographic wireframe: the drawn shapes become a 3D mesh of thin cyan lines and bright vertices floating in darkness, faint scanlines, slight glow and bloom",
+      "light": "its own cyan glow",
+      "palette": "electric cyan on deep navy black",
+      "backdrop": "pure black with a faint perspective grid",
+      "tags": "holographic wireframe, 3d mesh, cyan lines, glow, scanlines, black"
+    },
+    {
+      "id": "clay",
+      "group": "material",
+      "label": "Claymation",
+      "look": "Make it a stop-motion claymation model: hand-sculpted plasticine with visible fingerprints, slightly lumpy soft edges, a matte waxy surface and tiny tool marks, photographed on an animation set",
+      "light": "soft studio light like an animation set",
+      "palette": "saturated plasticine red, yellow, blue and cream",
+      "backdrop": "a plain cardboard-colored animation set",
+      "tags": "stop-motion claymation, plasticine, fingerprints, matte waxy, saturated red yellow blue"
+    },
+    {
+      "id": "chrome",
+      "group": "material",
+      "label": "Cromo",
+      "look": "Make it mirror-polished liquid chrome, every surface reflecting the room, sharp specular edges and soft iridescent tints in the reflections",
+      "light": "studio light with sharp reflections",
+      "palette": "silver with faint iridescent tints",
+      "backdrop": "plain dark graphite",
+      "tags": "liquid chrome, mirror polished metal, iridescent reflections, dark graphite"
+    },
+    {
+      "id": "glass",
+      "group": "material",
+      "label": "Cristal",
+      "look": "Make it cast in thick translucent glass, with refractions, internal bubbles and caustics on the floor",
+      "light": "bright backlight with sharp highlights",
+      "palette": "clear glass tinted amber and teal",
+      "backdrop": "plain light grey",
+      "tags": "cast translucent glass, amber and teal tint, refraction, caustics, backlight"
+    },
+    {
+      "id": "wood",
+      "group": "material",
+      "label": "Madera",
+      "look": "Make it carved from solid walnut, visible wood grain following the shapes, smooth sanded edges and a satin oil finish",
+      "light": "warm workshop light",
+      "palette": "honey, amber and dark brown",
+      "backdrop": "plain warm off-white",
+      "tags": "carved solid walnut, wood grain, sanded edges, honey amber brown, warm light"
+    },
+    {
+      "id": "papercraft",
+      "group": "material",
+      "label": "Papel",
+      "look": "Make it from cut and layered colored paper: flat cut-out shapes stacked in layers, crisp scissor edges, tiny paper shadows between the layers, visible paper fibre",
+      "light": "soft top light",
+      "palette": "coral, mustard, teal and cream paper",
+      "backdrop": "plain cream paper",
+      "tags": "layered paper cutouts, cut colored paper, crisp edges, paper shadows, coral mustard teal cream"
+    },
+    {
+      "id": "neon",
+      "group": "material",
+      "label": "Neón",
+      "look": "Make it bent from glowing neon tubes that follow the drawn lines, glow and bloom, colored reflections on the wall",
+      "light": "its own neon glow",
+      "palette": "hot pink and electric cyan",
+      "backdrop": "a dark brick wall at night",
+      "tags": "glowing neon tubes, hot pink and electric cyan, light bloom, dark brick wall at night"
+    },
+    {
+      "id": "brutalist",
+      "group": "material",
+      "label": "Brutalista",
+      "look": "Make it from raw board-formed concrete, as a monumental brutalist structure standing alone on an empty plaza: the drawn shapes become massive cast concrete volumes with formwork lines, tie holes, sharp chamfered edges and weather streaks, at the scale of a public monument",
+      "light": "clear afternoon sun with crisp hard shadows on the concrete",
+      "palette": "pale concrete grey, dark shadow and a slice of blue sky",
+      "backdrop": "an empty flat concrete plaza and open sky, nothing built behind it",
+      "tags": "brutalist concrete monument, board-formed concrete, formwork lines, afternoon sun, empty plaza"
+    },
+    {
+      "id": "mosaic",
+      "group": "material",
+      "label": "Mosaico",
+      "look": "Make it a mosaic of small glazed ceramic tiles: the drawn shapes filled with tesserae, pale grout lines between the tiles, slight colour variation from tile to tile, glossy glaze",
+      "light": "even daylight with small specular glints on the glaze",
+      "palette": "cobalt, turquoise, ochre and white tiles",
+      "backdrop": "a wall of pale grout-colored tiles",
+      "tags": "ceramic tile mosaic, tesserae, grout lines, glossy glaze, cobalt turquoise ochre"
+    },
+    {
+      "id": "relief",
+      "group": "material",
+      "label": "Relieve",
+      "look": "Carve it as a bas-relief sculpture in pale stone: the drawn shapes raised from a flat stone slab, chisel marks, softly rounded edges, dust in the recesses",
+      "light": "hard raking light from the upper left",
+      "palette": "limestone white, warm grey and shadow",
+      "backdrop": "the same flat stone slab",
+      "tags": "bas-relief stone carving, limestone, chisel marks, raking light"
+    },
+    {
+      "id": "felt",
+      "group": "material",
+      "label": "Fieltro",
+      "look": "Make it sewn from thick wool felt: soft fuzzy surface, visible stitched seams in contrasting thread, slightly puffy stuffed shapes, loose fibres catching the light",
+      "light": "soft window light",
+      "palette": "mustard, coral, teal and oatmeal felt",
+      "backdrop": "plain linen cloth",
+      "tags": "sewn wool felt, stitched seams, fuzzy, puffy, mustard coral teal oatmeal"
+    },
+    {
+      "id": "balloon",
+      "group": "material",
+      "label": "Globo",
+      "look": "Make it from inflated glossy latex balloons: taut rounded shapes, bright specular highlights, slight translucency at the edges, knotted ends",
+      "light": "studio light with sharp highlights",
+      "palette": "candy pink, sky blue and lemon latex",
+      "backdrop": "plain pastel wall",
+      "tags": "inflated latex balloons, glossy, specular highlights, candy pink sky blue lemon"
+    },
+    {
+      "id": "bricks",
+      "group": "material",
+      "label": "Bloques",
+      "look": "Build it from interlocking plastic building bricks: stepped blocky shapes, round studs on top, glossy ABS plastic, visible seams between the bricks",
+      "light": "even studio light",
+      "palette": "primary red, yellow, blue, white and grey bricks",
+      "backdrop": "a plain white studio floor",
+      "tags": "interlocking plastic building bricks, studs, glossy abs, primary red yellow blue"
+    },
+    {
+      "id": "ice",
+      "group": "material",
+      "label": "Hielo",
+      "look": "Carve it as an ice sculpture: clear frozen ice with internal cracks and trapped bubbles, frosted edges, melting droplets on the surface",
+      "light": "cool backlight with a blue rim",
+      "palette": "icy white, pale cyan and deep blue",
+      "backdrop": "a dark blue night setting",
+      "tags": "ice sculpture, clear frozen ice, internal cracks, frosted edges, cool backlight"
+    },
+    {
+      "id": "watercolor",
+      "group": "art",
+      "label": "Acuarela",
+      "look": "Paint it as a loose watercolor, wet washes bleeding past the lines, pigment blooms, visible paper grain",
+      "light": "flat, no hard shadows",
+      "palette": "indigo, rose and ochre washes",
+      "backdrop": "white cold-press paper",
+      "tags": "loose watercolor painting, wet washes, bleeding edges, indigo rose ochre, white paper"
+    },
+    {
+      "id": "crosshatch",
+      "group": "art",
+      "label": "Rayado",
+      "look": "Draw it as a crosshatched pen-and-ink drawing: fine black lines, dense crosshatching for the shadows, bare white paper for the light, like an etching",
+      "light": "modelled only by hatch density",
+      "palette": "black ink on white, no colour",
+      "backdrop": "white paper",
+      "tags": "crosshatched pen drawing, etching, fine black lines, hatching, white paper"
+    },
+    {
+      "id": "oil",
+      "group": "art",
+      "label": "Óleo",
+      "look": "Paint it as a thick impasto oil painting, visible brush strokes and palette-knife texture",
+      "light": "warm gallery light raking across the paint",
+      "palette": "rich earth tones with a cobalt accent",
+      "backdrop": "a plain painted canvas",
+      "tags": "impasto oil painting, thick brush strokes, palette knife texture, earth tones, cobalt accent"
+    },
+    {
+      "id": "cartoon",
+      "group": "art",
+      "label": "Cartoon",
+      "look": "Draw it as a bold flat 2D cartoon, thick clean black outlines, flat cel shading, no 3D volume",
+      "light": "flat light with one simple shadow tone",
+      "palette": "saturated red, yellow, blue and green fills",
+      "backdrop": "plain white",
+      "tags": "flat 2D cartoon, thick black outlines, flat cel shading, saturated primary colors"
+    },
+    {
+      "id": "anime",
+      "group": "art",
+      "label": "Anime",
+      "look": "Draw it as a 90s anime cel illustration: clean dark outlines, flat two-tone cel shading, soft airbrushed highlights, bright anime colours",
+      "light": "flat cel light with one shadow tone and specular glints",
+      "palette": "bright anime colours",
+      "backdrop": "a pastel gradient with soft sparkles",
+      "tags": "90s anime cel illustration, clean outlines, two-tone cel shading, airbrushed highlights, pastel gradient"
+    },
+    {
+      "id": "pixel",
+      "group": "art",
+      "label": "Pixel",
+      "look": "Draw it as 16-bit pixel art, chunky square pixels, one-pixel dark outline, two-tone pixel shading",
+      "light": "flat two-tone shading",
+      "palette": "a bright limited 12-color palette",
+      "backdrop": "plain dark navy",
+      "tags": "16-bit pixel art, chunky square pixels, limited bright palette, dark navy"
+    },
+    {
+      "id": "riso",
+      "group": "art",
+      "label": "Risografía",
+      "look": "Print it as a two-color risograph, grainy halftone texture, slight misregistration between the colors",
+      "light": "flat",
+      "palette": "fluorescent pink and teal blue ink",
+      "backdrop": "plain off-white paper",
+      "tags": "two-color risograph print, halftone grain, misregistration, fluorescent pink and teal"
+    },
+    {
+      "id": "ukiyoe",
+      "group": "art",
+      "label": "Ukiyo-e",
+      "look": "Print it as a Japanese ukiyo-e woodblock print: flat colour areas, a bold black keyline, visible wood grain in the flat tones, a bokashi gradient at the top, mulberry paper texture",
+      "light": "flat, no cast shadows",
+      "palette": "indigo, vermilion, ochre and pale cream",
+      "backdrop": "pale cream mulberry paper with a bokashi gradient",
+      "tags": "ukiyo-e woodblock print, flat colour, black keyline, wood grain, bokashi gradient, indigo vermilion ochre"
+    },
+    {
+      "id": "isometric",
+      "group": "art",
+      "label": "Isométrico",
+      "look": "Redraw it as a colored isometric sketch on white paper: crisp dark fineliner outlines, 30-degree isometric angles with faint pencil construction lines, bold flat marker fills in full saturated colour with visible marker strokes, short hatching on the shadow side",
+      "light": "flat, with one hatched shadow side and a small cast shadow in grey marker",
+      "palette": "saturated marker colours: coral red, teal, mustard yellow and violet",
+      "backdrop": "white sketchbook paper with a faint isometric grid",
+      "tags": "colored isometric sketch, fineliner outlines, saturated marker fills, hatching, sketchbook paper"
+    },
+    {
+      "id": "graffiti",
+      "group": "art",
+      "label": "Grafiti",
+      "look": "Paint it as spray-paint graffiti on a concrete wall: thick wildstyle outlines, paint drips, overspray haze, chrome fills with a bright highlight",
+      "light": "flat daylight on the wall",
+      "palette": "chrome silver, hot magenta and black outline",
+      "backdrop": "a weathered concrete wall",
+      "tags": "spray paint graffiti, wildstyle outlines, drips, overspray, chrome fill, concrete wall"
+    },
+    {
+      "id": "tattoo",
+      "group": "art",
+      "label": "Tatuaje",
+      "look": "Draw it as old-school tattoo flash: bold even black outlines, limited flat colour fills, whip shading, a small banner ribbon",
+      "light": "flat, shading only by whip strokes",
+      "palette": "black, red, yellow and green",
+      "backdrop": "aged ivory paper",
+      "tags": "old school tattoo flash, bold black outlines, flat colour fills, whip shading, aged paper"
+    }
+  ]
+}

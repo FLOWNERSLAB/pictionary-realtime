@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-STYLES = {s["id"]: s for s in json.loads((Path(__file__).parent / "styles.json").read_text(encoding="utf-8"))["styles"]}
+# One catalogue for the app and the harness: src/data/styles.json (rules at its top).
+STYLES_FILE = Path(__file__).resolve().parents[2] / "src" / "data" / "styles.json"
+STYLES = {s["id"]: s for s in json.loads(STYLES_FILE.read_text(encoding="utf-8"))["styles"]}
 
 # From "trace the lines" to "the sketch is only a hint". `{S}` is the subject phrase.
 LADDER = [

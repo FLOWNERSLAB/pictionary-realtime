@@ -45,14 +45,18 @@ en local (montado en Vite por `vite-plugin-api.ts`) y en Vercel.
 ## Cómo se usa
 
 1. `Espacio` enciende el bucle. Dibuja: cada trazo sale hacia el modelo y la imagen de la derecha se actualiza.
-2. **Pista**: qué estás dibujando («cat», «rocket»). Es opcional, pero con los estilos de foto klein no reconoce
-   un garabato sin ella (sin pista devuelve el dibujo convertido en un objeto blanco con las líneas pintadas).
-3. **AI Strength** (`[` `]`): bajo calca el dibujo, alto manda el prompt. Ocho peldaños, ver más abajo.
-4. **Estilo** (`1`-`9` para los nueve primeros): tres grupos, Foto, Materia y Arte.
-5. `T` borra y dibuja el boceto de prueba trazo a trazo con el bucle encendido (el boceto se elige en Ajustes).
-6. La tira de abajo guarda los últimos frames: clic en uno para fijarlo en la caja de luz y compararlo; `Esc` o
+2. **Anticipar** (encendido por defecto): la máquina adivina qué dibujas y su adivinanza entra en el prompt. En el
+   juego nadie escribe la palabra, así que esta es la única forma de que el prompt diga «a cat» mientras dibujas un
+   gato. Cada trazo asentado manda el lienzo (448 px) a Claude Haiku (`POST /api/guess`, ~1 s, ~0,0001 $); por
+   encima del 55 % de confianza entra la palabra, por debajo solo el tipo («some kind of animal»), y si no ve nada el
+   prompt dice «what it depicts», como sin pista. Necesita `ANTHROPIC_API_KEY` en `.env`.
+3. **Pista**: qué estás dibujando («cat», «rocket»). Opcional y manda sobre la adivinanza; es el atajo para medir.
+4. **AI Strength** (`[` `]`): bajo calca el dibujo, alto manda el prompt. Ocho peldaños, ver más abajo.
+5. **Estilo** (`1`-`9` para los nueve primeros): cuatro grupos, Foto, Render, Materia y Arte.
+6. `T` borra y dibuja el boceto de prueba trazo a trazo con el bucle encendido (el boceto se elige en Ajustes).
+7. La tira de abajo guarda los últimos frames: clic en uno para fijarlo en la caja de luz y compararlo; `Esc` o
    «Volver al directo» para soltarlo.
-7. `O` cambia a la vista superpuesta: dibujas encima del render, con tu trazo como fantasma de lápiz.
+8. `O` cambia a la vista superpuesta: dibujas encima del render, con tu trazo como fantasma de lápiz.
 
 La **cinta de latencia** deja una marca por frame: azul por debajo de 800 ms, ámbar hasta 1,5 s, rojo por encima.
 La marca discontinua es el frame que sigue en vuelo. Las FPS son reales: salen del intervalo entre respuestas
@@ -94,16 +98,28 @@ debajo de 0,7 acumula manchas de color; el lab la limita a 0,3) y pintar el fram
 
 ### Estilos
 
-Los 20 estilos viven en `src/data/styles.ts`. Un estilo es un **tratamiento**, nunca un sujeto: dice cómo se hace la
-imagen (`look`: cámara, material, técnica), su `light`, su `palette` y su `backdrop`. **No contiene ningún
-sustantivo de objeto** («toy», «figurine», «sign», «vase»): era lo que hacía que «Cartoon» o «3D Toy» dibujaran un
-juguete fuese lo que fuese el boceto. Qué es la imagen lo deciden solo el boceto y la pista.
+Los 29 estilos viven en `src/data/styles.json` (una sola copia para la app, `src/data/styles.ts`, y el arnés,
+`scripts/lab/promptkit.py`). Un estilo es un **tratamiento**, nunca la palabra: dice cómo se hace la imagen (`look`:
+cámara, material, técnica, mundo), su `light`, su `palette` y su `backdrop`. **No contiene ningún sustantivo de
+objeto** («toy», «figurine», «sign», «vase»): era lo que hacía que «Cartoon» o «3D Toy» dibujaran un juguete fuese
+lo que fuese el boceto. Sí puede nombrar un **mundo** en el que leer el boceto (diseño de producto, edificio
+brutalista, asset de videojuego, brotes sobre musgo): es el truco de los ejemplos de Krea («Render the drawing as an
+HD photorealistic render of a high end physical product design», «turn image into front facing architectural render
+of brutalist building concrete», «low poly render of a game asset with lighting», «colored isometric sketch») y no
+regala la palabra. Cuanto más concreto el `look` (material exacto, acabado, marcas de herramienta, lente), mejor
+lo sigue klein.
+
+El 24 oct 2026 se quitaron los seis modos de fotografía (Cine, 35 mm, Hora dorada, Noche, Macro, Blanco y negro):
+solo cambiaban la luz de la misma foto. Esa misma tarde, probados por David, cayeron Estudio y Fósil, y Brutalista pasó de
+«render de edificio» a hormigón sobre lo dibujado: con el mundo «building» en el prompt klein ponía un edificio detrás de
+cualquier trazo (una lámpara salía como fachada).
 
 | Grupo | Estilos |
 |:--|:--|
-| Foto | Natural, Estudio, Cine, 35 mm, Hora dorada, Noche, Macro, Blanco y negro |
-| Materia | Arcilla, Cromo, Cristal, Madera, Papel, Neón |
-| Arte | Acuarela, Tinta, Óleo, Cartoon, Pixel, Risografía |
+| Foto | Natural, Producto, Brote |
+| Render | Low poly, Holograma |
+| Materia | Claymation, Cromo, Cristal, Madera, Papel, Neón, Brutalista, Mosaico, Relieve, Fieltro, Globo, Bloques, Hielo |
+| Arte | Acuarela, Rayado, Óleo, Cartoon, Anime, Pixel, Risografía, Ukiyo-e, Isométrico, Grafiti, Tatuaje |
 
 ## StreamDiffusion
 
@@ -156,13 +172,13 @@ sin la app, para medir sin sesgos del navegador:
 python scripts/lab/sketches.py <carpeta>        # seis bocetos + etapas progresivas + variantes borrosas
 python scripts/lab/exp_strength.py <carpeta>    # E1: todos los mandos como posible strength
 python scripts/lab/exp_ladder.py <carpeta>      # E1b: la escalera de redacciones
-python scripts/lab/exp_styles.py <carpeta>      # E2: 20 estilos × 4 bocetos × 3 strengths, con y sin pista
+python scripts/lab/exp_styles.py <carpeta>      # E2: estilos × bocetos × strengths, con y sin pista
 python scripts/lab/exp_timing.py <carpeta>      # E3: caliente, arranque, cambio de estilo, dibujo en directo
 python scripts/lab/build_report.py <carpeta> informe.html
 ```
 
-`promptkit.py` y `styles.json` son el espejo de `src/lib/prompt.ts` y `src/data/styles.ts`: si cambias uno,
-cambia el otro. `metrics.py` mide cuánto del dibujo sobrevive en un render (adherencia: líneas dibujadas con un
+`promptkit.py` es el espejo de `src/lib/prompt.ts` (si cambias uno, cambia el otro) y lee los estilos del mismo
+`src/data/styles.json` que la app. `metrics.py` mide cuánto del dibujo sobrevive en un render (adherencia: líneas dibujadas con un
 borde del render cerca; novedad: bordes del render lejos de cualquier línea).
 
 Los scripts `.mjs` de `scripts/` son las sondas antiguas del socket (`probe-socket.mjs`, `bench-realtime.mjs`).

@@ -1,4 +1,6 @@
 import type { Style } from '../data/styles';
+import type { Guess } from './guess';
+import { subjectFromGuess } from './guess';
 
 /**
  * The prompt klein realtime gets, from three parts that never mix:
@@ -118,10 +120,10 @@ const capital = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1
  * the sketch is; klein reads the drawing on its own and, with a photo style, needs the
  * word to recognise a crude doodle (22 oct: pizza → metal sign without it).
  */
-export const subjectPhrase = (hint: string) => {
+export const subjectPhrase = (hint: string, guess: Guess | null = null) => {
   const word = hint.trim().replace(/\s+/g, ' ');
 
-  if (!word) return 'what it depicts';
+  if (!word) return subjectFromGuess(guess) ?? 'what it depicts';
 
   return /^(a|an|the|some|two|three)\s/i.test(word) ? word : `a ${word}`;
 };
@@ -134,14 +136,16 @@ export const styleClause = (style: Style, soft: boolean) =>
 export type PromptInput = {
   style: Style;
   hint: string;
+  /** The machine's own guess (Anticipar); used only when there is no hint. */
+  guess?: Guess | null;
   strength: number;
   /** Adds the style's plain backdrop so a lone doodle does not grow a scene around it. */
   backdrop: boolean;
 };
 
-export const buildPrompt = ({ style, hint, strength, backdrop }: PromptInput) => {
+export const buildPrompt = ({ style, hint, guess = null, strength, backdrop }: PromptInput) => {
   const rung = rungFor(strength);
-  const parts = [rung.text.replaceAll('{S}', subjectPhrase(hint)), styleClause(style, rung.softStyle)];
+  const parts = [rung.text.replaceAll('{S}', subjectPhrase(hint, guess)), styleClause(style, rung.softStyle)];
 
   if (backdrop && !rung.softStyle) parts.push(`${capital(style.backdrop)} behind it, nothing else in the frame.`);
 

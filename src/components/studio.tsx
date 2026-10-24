@@ -8,8 +8,10 @@ import type { StreamSettings } from '../data/stream';
 import { STREAM_DEFAULTS, STREAM_MODEL, buildStreamParams, describeStreamStrength } from '../data/stream';
 import { DEFAULT_STYLE_ID, STYLES, findStyle } from '../data/styles';
 import { useDaydreamStream } from '../hooks/use-daydream-stream';
+import { useGuess } from '../hooks/use-guess';
 import { useLiveRender } from '../hooks/use-live-render';
 import { hasFalKey } from '../lib/fal';
+import { GUESS_CONFIDENT, hasGuessKey } from '../lib/guess';
 import { estimateCost, format, summarize } from '../lib/metrics';
 import { AI_STRENGTH_DEFAULT, buildPrompt, inputBlurFor, rungFor } from '../lib/prompt';
 import { STREAM_NEGATIVE, buildStreamPrompt } from '../lib/stream-prompt';
@@ -81,6 +83,9 @@ export const Studio = () => {
   const [pinned, setPinned] = useState<number | null>(null);
   const [hasKey, setHasKey] = useState(true);
   const [hasDaydreamKey, setHasDaydreamKey] = useState(true);
+  const [hasAnthropicKey, setHasAnthropicKey] = useState(true);
+  /** Anticipar: the machine guesses the drawing and its guess steers the prompt. */
+  const [anticipate, setAnticipate] = useState(true);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -93,16 +98,27 @@ export const Studio = () => {
   const rung = rungFor(strength);
   const isStream = engine === 'stream';
 
+  const getSvg = useCallback(() => wrapperRef.current?.querySelector('svg') ?? null, []);
+
+  const hasDrawing = strokes.some(stroke => stroke.tool === 'pen');
+
+  // ── The live guess (both engines read it; a typed hint always wins over it)
+  const guessing = useGuess({ enabled: running && anticipate && hasAnthropicKey && !hint.trim(), hasDrawing, getSvg, dirtyRef });
+  const { guess } = guessing;
+  /** What the history and the labels show as the subject: the hint, or the guess marked with ≈. */
+  const shownHint = hint.trim() || (guess?.word ? `≈${guess.word}` : '');
+
   // ── Flux realtime lane (untouched by the stream lane)
-  const prompt = useMemo(() => buildPrompt({ style, hint, strength, backdrop: settings.backdrop }), [style, hint, strength, settings.backdrop]);
+  const prompt = useMemo(() => buildPrompt({ style, hint, guess, strength, backdrop: settings.backdrop }), [style, hint, guess, strength, settings.backdrop]);
   const inputBlur = inputBlurFor(strength);
   const meta = useMemo(
-    () => ({ styleId: style.id, styleLabel: style.label, strength, rungLabel: rung.label, hint }),
-    [style.id, style.label, strength, rung.label, hint],
+    () => ({ styleId: style.id, styleLabel: style.label, strength, rungLabel: rung.label, hint: shownHint }),
+    [style.id, style.label, strength, rung.label, shownHint],
   );
 
   useEffect(() => {
     void hasFalKey().then(setHasKey);
+    void hasGuessKey().then(setHasAnthropicKey);
     fetch('/api/daydream/status')
       .then(response => response.json())
       .then(({ hasKey: present }) => setHasDaydreamKey(Boolean(present)))
@@ -123,14 +139,10 @@ export const Studio = () => {
     dirtyRef.current += 1;
   }, []);
 
-  const getSvg = useCallback(() => wrapperRef.current?.querySelector('svg') ?? null, []);
-
-  const hasDrawing = strokes.some(stroke => stroke.tool === 'pen');
-
   const live = useLiveRender({ enabled: running && !isStream, prompt, settings, inputBlur, meta, hasDrawing, getSvg, dirtyRef });
 
   // ── StreamDiffusion lane
-  const streamPrompt = useMemo(() => buildStreamPrompt({ style, hint, backdrop: settings.backdrop }), [style, hint, settings.backdrop]);
+  const streamPrompt = useMemo(() => buildStreamPrompt({ style, hint, guess, backdrop: settings.backdrop }), [style, hint, guess, settings.backdrop]);
   const streamParams = useMemo(
     () => buildStreamParams({ prompt: streamPrompt, negative: STREAM_NEGATIVE, seed: settings.seed, strength, stream: streamSettings }),
     [streamPrompt, settings.seed, strength, streamSettings],
@@ -330,7 +342,7 @@ export const Studio = () => {
       {isStream ? (
         <>
           {STREAM_MODEL.label} · {style.label} · {Math.round(strength * 100)}
-          {hint ? ` · «${hint}»` : ''}
+          {shownHint ? ` · «${shownHint}»` : ''}
         </>
       ) : shown ? (
         <>
@@ -472,6 +484,41 @@ export const Studio = () => {
                   aria-label="Pista: qué representa el dibujo"
                 />
               </label>
+
+              <button
+                type="button"
+                className="lab-chip"
+                aria-pressed={anticipate && hasAnthropicKey}
+                disabled={!hasAnthropicKey}
+                onClick={() => setAnticipate(current => !current)}
+                title={
+                  hasAnthropicKey
+                    ? 'La máquina adivina qué dibujas (Claude Haiku, una llamada por trazo) y su adivinanza entra en el prompt cuando no hay pista. Es el juego: nadie escribe la palabra.'
+                    : 'Falta ANTHROPIC_API_KEY en .env'
+                }
+              >
+                Anticipar
+              </button>
+
+              {anticipate && hasAnthropicKey && !hint.trim() ? (
+                <span className="text-neutral-11 flex min-w-0 items-center gap-2 text-xs" aria-live="polite" title={guessing.error ?? undefined}>
+                  <span className="lab-dot" data-phase={guessing.error ? 'error' : guessing.pending ? 'cold' : guess ? 'live' : 'off'} />
+                  {guess?.word ? (
+                    <>
+                      <span className="text-neutral-12 truncate">cree que es «{guess.word}»</span>
+                      <span className="font-mono tabular-nums">
+                        {guess.confidence} %{guess.confidence < GUESS_CONFIDENT && guess.kind !== 'unknown' ? ` · ${guess.kind}` : ''} · {format(guess.ms)} ms
+                      </span>
+                    </>
+                  ) : guess ? (
+                    <span>todavía no ve nada</span>
+                  ) : running ? (
+                    <span>adivina al primer trazo</span>
+                  ) : (
+                    <span>adivina mientras dibujas</span>
+                  )}
+                </span>
+              ) : null}
 
               {testing ? (
                 <Button variant="outline" className="rounded-full" onClick={stopTest}>

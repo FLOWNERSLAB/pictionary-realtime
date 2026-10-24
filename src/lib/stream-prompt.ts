@@ -1,4 +1,6 @@
 import type { Style } from '../data/styles';
+import type { Guess } from './guess';
+import { GUESS_CONFIDENT } from './guess';
 
 /**
  * The prompt StreamDiffusion gets. SDXL-Turbo reads CLIP: short comma tags, the
@@ -10,8 +12,8 @@ import type { Style } from '../data/styles';
  * AI Strength does not live in these words: on StreamDiffusion it is `t_index_list`
  * and the line ControlNet weight (src/data/stream.ts).
  */
-export const buildStreamPrompt = ({ style, hint, backdrop }: { style: Style; hint: string; backdrop: boolean }) => {
-  const word = hint.trim().replace(/\s+/g, ' ');
+export const buildStreamPrompt = ({ style, hint, guess = null, backdrop }: { style: Style; hint: string; guess?: Guess | null; backdrop: boolean }) => {
+  const word = hint.trim().replace(/\s+/g, ' ') || (guess && guess.confidence >= GUESS_CONFIDENT ? guess.word : '');
   const parts = [word, style.tags].filter(Boolean);
 
   if (backdrop) parts.push('centered', `${style.backdrop} background`);

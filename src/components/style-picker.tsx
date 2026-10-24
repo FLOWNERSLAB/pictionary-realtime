@@ -1,16 +1,13 @@
-import type { StyleGroup } from '../data/styles';
-import { STYLE_GROUP_LABEL, styleKey, stylesIn } from '../data/styles';
+import { STYLE_GROUPS, STYLE_GROUP_LABEL, styleKey, stylesIn } from '../data/styles';
 
 type StylePickerProps = {
   value: string;
   onChange: (id: string) => void;
 };
 
-const GROUPS: StyleGroup[] = ['photo', 'material', 'art'];
-
 export const StylePicker = ({ value, onChange }: StylePickerProps) => (
   <div className="flex flex-col gap-2" role="group" aria-label="Estilo">
-    {GROUPS.map(group => (
+    {STYLE_GROUPS.map(group => (
       <div key={group} className="flex items-center gap-3">
         <span className="text-neutral-10 w-14 shrink-0 text-[11px] tracking-wide uppercase">{STYLE_GROUP_LABEL[group]}</span>
         <div className="lab-scroll-x flex min-w-0 flex-1 gap-2 overflow-x-auto pr-8">
